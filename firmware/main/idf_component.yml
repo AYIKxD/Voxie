@@ -1,0 +1,19 @@
+## IDF Component Manager Manifest File
+## Voxie firmware dependencies
+dependencies:
+  idf:
+    version: ">=6.0.0"
+
+  # JSON: IDF v6 moved the `json` component out of core to the registry.
+  # Provides cJSON.h used by mcp_server / iot_tools / wifi_manager.
+  espressif/cjson: "^1.7.19"
+
+  # WebSocket client: moved out of core in IDF v6.
+  espressif/esp_websocket_client: "^1.8.0"
+
+  # TensorFlow Lite for Microcontrollers + ESP-NN accelerated kernels.
+  # Used by the KWS engine for on-device streaming wake-word inference.
+  espressif/esp-tflite-micro: "^1.4.0"
+
+  # Opus codec (encode mic audio, decode TTS audio) with ESP32 optimizations.
+  esphome/micro-opus: "^0.4.1"

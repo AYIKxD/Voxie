@@ -21,16 +21,23 @@ idf_component_register(
         "notify"
     REQUIRES
         driver
+        esp_driver_gpio
+        esp_driver_i2s
+        esp_driver_ledc
+        esp_ringbuf
         esp_wifi
         esp_event
         esp_netif
         esp_http_server
         esp_https_ota
+        app_update
         esp_timer
         nvs_flash
-        json
+        cjson
         esp_websocket_client
-        esp_tls
+        esp-tls
+        esp-tflite-micro
+        micro-opus
         lwip
     EMBED_FILES
         "kws/model_data.tflite"
