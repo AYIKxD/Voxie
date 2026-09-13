@@ -11,3 +11,4 @@ python-dotenv
 opuslib
 piper-tts
 numpy
+soxr

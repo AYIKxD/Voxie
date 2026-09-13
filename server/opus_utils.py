@@ -1,38 +1,57 @@
-import opuslib
 import logging
+
+import opuslib
 
 logger = logging.getLogger(__name__)
 
-def decode_opus_frames(opus_data: bytes, sample_rate: int = 16000) -> bytes:
-    """
-    Decodes a stream of Opus frames to PCM.
-    Note: For a simple byte stream, you might need framing (e.g. Ogg or size prefixes).
-    Assuming fixed size frames or a simple wrapper if raw.
-    """
-    # This is a placeholder for actual Opus decoding. 
-    # Standard opuslib.Decoder requires you to feed exact frames.
-    # In practice, binary frames sent over websocket should be single Opus packets.
-    decoder = opuslib.Decoder(sample_rate, 1)
-    # Mocking decode - in reality you would decode packet by packet
-    logger.warning("decode_opus_frames: implement packet-by-packet decoding")
-    return opus_data # Mock return
+SAMPLE_RATE = 16000
+CHANNELS = 1
+FRAME_MS = 60
+FRAME_SAMPLES = SAMPLE_RATE * FRAME_MS // 1000  # 960
 
-def encode_pcm_to_opus(pcm_data: bytes, sample_rate: int = 16000, frame_duration_ms: int = 60) -> list[bytes]:
-    """
-    Encodes PCM data to a list of Opus frames.
-    """
-    encoder = opuslib.Encoder(sample_rate, 1, opuslib.APPLICATION_VOIP)
-    frame_size = int(sample_rate * (frame_duration_ms / 1000.0))
-    bytes_per_frame = frame_size * 2 # 16-bit mono
-    
-    opus_frames = []
-    for i in range(0, len(pcm_data), bytes_per_frame):
-        chunk = pcm_data[i:i+bytes_per_frame]
-        if len(chunk) < bytes_per_frame:
-            # Pad with silence
-            chunk += b'\x00' * (bytes_per_frame - len(chunk))
-        
-        opus_frame = encoder.encode(chunk, frame_size)
-        opus_frames.append(opus_frame)
-        
-    return opus_frames
+
+class OpusStreamDecoder:
+    """Stateful Opus decoder for one audio stream (one packet per WS frame)."""
+
+    def __init__(self, sample_rate: int = SAMPLE_RATE, channels: int = CHANNELS):
+        self.sample_rate = sample_rate
+        self.channels = channels
+        self.frame_samples = sample_rate * FRAME_MS // 1000
+        self.decoder = opuslib.Decoder(sample_rate, channels)
+
+    def decode(self, packet: bytes) -> bytes:
+        """Decode one Opus packet to 16-bit PCM bytes."""
+        try:
+            return self.decoder.decode(packet, self.frame_samples)
+        except opuslib.OpusError as e:
+            logger.warning(f"Opus decode error: {e}")
+            return b""
+
+    def reset(self):
+        try:
+            self.decoder.reset_state()
+        except Exception:
+            pass
+
+
+class OpusStreamEncoder:
+    """Stateful Opus encoder for TTS output."""
+
+    def __init__(self, sample_rate: int = SAMPLE_RATE, channels: int = CHANNELS,
+                 bitrate: int = 16000):
+        self.sample_rate = sample_rate
+        self.channels = channels
+        self.frame_samples = sample_rate * FRAME_MS // 1000
+        self.frame_bytes = self.frame_samples * 2
+        self.encoder = opuslib.Encoder(sample_rate, channels, opuslib.APPLICATION_VOIP)
+        self.encoder.bitrate = bitrate
+
+    def encode_pcm(self, pcm: bytes):
+        """Split 16-bit PCM into a list of Opus packets."""
+        packets = []
+        for i in range(0, len(pcm), self.frame_bytes):
+            chunk = pcm[i:i + self.frame_bytes]
+            if len(chunk) < self.frame_bytes:
+                chunk += b"\x00" * (self.frame_bytes - len(chunk))
+            packets.append(self.encoder.encode(chunk, self.frame_samples))
+        return packets
