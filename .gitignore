@@ -1,0 +1,32 @@
+# ESP-IDF build
+firmware/build/
+firmware/sdkconfig
+firmware/sdkconfig.old
+firmware/managed_components/
+firmware/dependencies.lock
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+training/data/
+training/output/
+server/.env
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# Backup
+*.bak
+build.md
+
+# Reference project (not part of Voxie)
+xiaozhi/
