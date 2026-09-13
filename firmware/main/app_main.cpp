@@ -275,6 +275,15 @@ extern "C" void app_main(void) {
     display_manager_set_state(DEVICE_STATE_IDLE_LISTENING);
     led_strip_set_state(DEVICE_STATE_IDLE_LISTENING);
 
+    // Register device identity; the hello handshake is sent automatically when
+    // the WebSocket connects (sending it here would race the connection).
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    char device_id[18];
+    snprintf(device_id, sizeof(device_id), "%02X%02X%02X%02X%02X%02X",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    ws_protocol_set_device_info(device_id, FIRMWARE_VERSION);
+
     // Connect to server
     char server_url[256] = {0};
     if (wifi_manager_get_server_url(server_url, sizeof(server_url)) && strlen(server_url) > 0) {
@@ -283,14 +292,6 @@ extern "C" void app_main(void) {
         ESP_LOGW(TAG, "No server URL configured, using default");
         ws_protocol_connect("ws://192.168.1.100:8000/ws");
     }
-
-    // Send hello once connected
-    uint8_t mac[6];
-    esp_read_mac(mac, ESP_MAC_WIFI_STA);
-    char device_id[18];
-    snprintf(device_id, sizeof(device_id), "%02X%02X%02X%02X%02X%02X",
-             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-    ws_protocol_send_hello(device_id, FIRMWARE_VERSION);
 
     // --- 14. Start main event loop task ---
     xTaskCreatePinnedToCore(main_event_task, "main_evt", 4096, NULL, 5, NULL, 1);

@@ -16,6 +16,8 @@ static esp_websocket_client_handle_t s_ws_client = NULL;
 static ws_text_cb_t s_text_cb = NULL;
 static ws_binary_cb_t s_binary_cb = NULL;
 static bool s_connected = false;
+static char s_device_id[32] = {0};
+static char s_fw_version[32] = {0};
 
 // ============================================================================
 // WebSocket event handler
@@ -29,6 +31,10 @@ static void ws_event_handler(void *arg, esp_event_base_t event_base,
         case WEBSOCKET_EVENT_CONNECTED:
             ESP_LOGI(TAG, "WebSocket connected");
             s_connected = true;
+            // Send the hello handshake only now that the socket is actually up.
+            if (s_device_id[0] != '\0') {
+                ws_protocol_send_hello(s_device_id, s_fw_version);
+            }
             break;
 
         case WEBSOCKET_EVENT_DISCONNECTED:
@@ -72,6 +78,11 @@ static void ws_event_handler(void *arg, esp_event_base_t event_base,
 
 void ws_protocol_init(void) {
     ESP_LOGI(TAG, "WebSocket protocol module initialized");
+}
+
+void ws_protocol_set_device_info(const char *device_id, const char *firmware_version) {
+    strncpy(s_device_id, device_id, sizeof(s_device_id) - 1);
+    strncpy(s_fw_version, firmware_version, sizeof(s_fw_version) - 1);
 }
 
 void ws_protocol_connect(const char *server_url) {

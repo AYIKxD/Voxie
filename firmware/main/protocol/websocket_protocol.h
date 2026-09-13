@@ -36,6 +36,10 @@ bool ws_protocol_send_text(const char *json_str);
 /// Send a binary frame (Opus audio with header)
 bool ws_protocol_send_binary(const uint8_t *data, size_t len);
 
+/// Set the device identity used for the "hello" handshake. The hello is sent
+/// automatically once the socket connects (avoids racing the connection).
+void ws_protocol_set_device_info(const char *device_id, const char *firmware_version);
+
 /// Send the "hello" handshake message
 void ws_protocol_send_hello(const char *device_id, const char *firmware_version);
 
