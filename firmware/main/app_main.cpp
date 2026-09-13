@@ -265,10 +265,14 @@ extern "C" void app_main(void) {
     wifi_manager_init();
 
     // --- 13. Connect to cloud server once Wi-Fi is up ---
-    // Wait for Wi-Fi
+    // Wait for Wi-Fi, logging periodically so the console stays observable.
     EventGroupHandle_t events = state_machine_get_events();
     ESP_LOGI(TAG, "Waiting for Wi-Fi connection...");
-    xEventGroupWaitBits(events, EVT_WIFI_CONNECTED, pdFALSE, pdTRUE, portMAX_DELAY);
+    while ((xEventGroupGetBits(events) & EVT_WIFI_CONNECTED) == 0) {
+        vTaskDelay(pdMS_TO_TICKS(3000));
+        ESP_LOGI(TAG, "Still waiting for Wi-Fi (state=%s)...",
+                 device_state_to_str(state_machine_get_state()));
+    }
 
     ESP_LOGI(TAG, "Wi-Fi connected! Connecting to cloud server...");
     state_machine_transition(DEVICE_STATE_IDLE_LISTENING);
