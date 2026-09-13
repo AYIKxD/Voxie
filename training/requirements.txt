@@ -1,0 +1,34 @@
+# Voxie wake-word training environment
+# Requires Python 3.11 or 3.12 (TensorFlow has no wheels for 3.13/3.14 yet).
+#
+#   python -m venv .venv
+#   .venv\Scripts\activate        # Windows
+#   pip install -r requirements.txt
+#   pip install "git+https://github.com/OHF-Voice/micro-wake-word.git#egg=microwakeword"
+#
+# NOTE: microWakeWord's `audio/` and `layers/` subpackages have no __init__.py,
+# so a normal (non-editable) install omits them. Install from the git URL as
+# above, or do an editable install of a local clone:
+#   pip install -e path/to/micro-wake-word
+
+# Core ML
+tensorflow>=2.18
+tensorboard
+ai-edge-litert
+numpy>=2.0
+scipy
+scikit-learn
+
+# microWakeWord deps
+mmap_ninja
+audiomentations
+audio_metadata
+pymicro-features
+webrtcvad-wheels
+datasets==2.21.0      # 3.x+ dropped soundfile decoding; requires torchcodec
+pyyaml
+soundfile
+soxr
+
+# TTS for synthetic sample generation
+piper-tts

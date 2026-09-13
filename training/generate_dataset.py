@@ -2,119 +2,163 @@
 """
 generate_dataset.py — Generate synthetic wake-word training data using Piper TTS.
 
-Produces hundreds of positive samples of the wake word spoken by different synthetic
-voices with varied pitch/speed, plus negative samples from common words.
+Produces positive samples of the wake word spoken by different synthetic voices
+with varied pitch/speed, plus negative samples from common words.
 
 Usage:
     python generate_dataset.py --wake-word "Hey Voxie" --output-dir data/
 """
 import argparse
+import glob
 import os
-import subprocess
 import random
+import shutil
+import subprocess
+import sys
+import tempfile
 
-def generate_positive_samples(wake_word: str, output_dir: str, num_samples: int = 500):
-    """Generate synthetic positive samples using Piper TTS with varied voices."""
+
+def find_piper() -> str:
+    """Locate the Piper TTS executable (venv first, then PATH)."""
+    exe = "piper.exe" if os.name == "nt" else "piper"
+    candidate = os.path.join(os.path.dirname(sys.executable), exe)
+    if os.path.exists(candidate):
+        return candidate
+    found = shutil.which("piper")
+    if found:
+        return found
+    print("ERROR: 'piper' not found. Install with: pip install piper-tts")
+    sys.exit(1)
+
+
+def find_voices(voices_dir: str):
+    voices = sorted(glob.glob(os.path.join(voices_dir, "*.onnx")))
+    if not voices:
+        print(f"ERROR: no Piper voices (*.onnx) found in {voices_dir}")
+        print("Download e.g. en_US-lessac-medium.onnx from "
+              "https://huggingface.co/rhasspy/piper-voices")
+        sys.exit(1)
+    return voices
+
+
+def synthesize(piper: str, model: str, text: str, output_file: str,
+               length_scale: float, noise_scale: float, noise_w: float) -> bool:
+    # Passing text via --input-file is more reliable than stdin on Windows,
+    # where piper occasionally deadlocks waiting on the pipe.
+    fd, text_file = tempfile.mkstemp(suffix=".txt")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text + "\n")
+
+        cmd = [
+            piper,
+            "--model", model,
+            "--input-file", text_file,
+            "--output_file", output_file,
+            "--length-scale", f"{length_scale:.3f}",
+            "--noise-scale", f"{noise_scale:.3f}",
+            "--noise-w-scale", f"{noise_w:.3f}",
+        ]
+        proc = subprocess.run(cmd, capture_output=True, timeout=120)
+        if proc.returncode != 0:
+            print(f"  Warning: piper failed: {proc.stderr.decode(errors='replace').strip()}")
+            return False
+        return os.path.exists(output_file) and os.path.getsize(output_file) > 0
+    except subprocess.TimeoutExpired:
+        print("  Warning: piper timed out")
+        return False
+    finally:
+        try:
+            os.remove(text_file)
+        except OSError:
+            pass
+
+
+def generate_positive_samples(wake_word, voices, piper, output_dir,
+                              num_samples):
     pos_dir = os.path.join(output_dir, "positive")
     os.makedirs(pos_dir, exist_ok=True)
 
-    # Piper voice models to use (download separately)
-    voices = [
-        "en_US-lessac-medium",
-        "en_US-amy-medium",
-        "en_US-ryan-medium",
-        "en_GB-alba-medium",
+    # Phonetic spellings of the wake word help cover pronunciation variety.
+    variants = [
+        wake_word,
+        wake_word.lower(),
+        wake_word.replace("Voxie", "Voxi"),
+        wake_word.replace("Voxie", "Voxee"),
     ]
 
     print(f"Generating {num_samples} positive samples for: '{wake_word}'")
-
     for i in range(num_samples):
         voice = random.choice(voices)
-        # Vary speed slightly (0.8x to 1.2x)
-        speed = random.uniform(0.8, 1.2)
-        output_file = os.path.join(pos_dir, f"pos_{i:04d}.wav")
+        text = random.choice(variants)
+        output_file = os.path.join(pos_dir, f"pos_{i:05d}.wav")
 
-        try:
-            # Use Piper TTS to synthesize
-            cmd = [
-                "piper",
-                "--model", voice,
-                "--output_file", output_file,
-                "--length-scale", str(1.0 / speed),
-            ]
-            proc = subprocess.run(
-                cmd, input=wake_word, text=True,
-                capture_output=True, timeout=30
-            )
-            if proc.returncode == 0:
-                if (i + 1) % 50 == 0:
-                    print(f"  Generated {i + 1}/{num_samples}")
-            else:
-                print(f"  Warning: Piper failed for sample {i}: {proc.stderr}")
-        except FileNotFoundError:
-            print("ERROR: 'piper' not found. Install piper-tts or add to PATH.")
-            print("       pip install piper-tts")
-            return
-        except Exception as e:
-            print(f"  Error generating sample {i}: {e}")
+        length_scale = random.uniform(0.85, 1.15)   # slower < 1 < faster
+        noise_scale = random.uniform(0.4, 0.8)
+        noise_w = random.uniform(0.6, 1.0)
 
-    print(f"Done. {num_samples} positive samples in {pos_dir}")
+        if synthesize(piper, voice, text, output_file,
+                      length_scale, noise_scale, noise_w):
+            if (i + 1) % 50 == 0:
+                print(f"  Generated {i + 1}/{num_samples}")
+
+    print(f"Done. Positive samples in {pos_dir}")
 
 
-def generate_negative_samples(output_dir: str, num_samples: int = 200):
-    """Generate negative samples from common words that should NOT trigger."""
+def generate_negative_samples(voices, piper, output_dir, num_samples):
     neg_dir = os.path.join(output_dir, "negative")
     os.makedirs(neg_dir, exist_ok=True)
 
-    # Common words and phrases that might cause false positives
+    # Common words / phonetically-similar phrases that must NOT trigger.
     negative_phrases = [
         "hey there", "how are you", "good morning", "excuse me",
         "okay fine", "hey buddy", "what's up", "hello world",
         "hey siri", "hey google", "alexa", "computer",
-        "hey foxy", "hey proxy", "hey boxy",  # phonetically similar
+        "hey foxy", "hey proxy", "hey boxy", "hey rocksy",   # similar
         "the vox", "a voice", "invoking", "provoking",
+        "turn on the lamp", "what's the weather", "play some music",
+        "set a timer", "volume up", "volume down", "stop", "next song",
     ]
 
     print(f"Generating {num_samples} negative samples")
-
-    voices = ["en_US-lessac-medium", "en_US-amy-medium"]
-    idx = 0
-    while idx < num_samples:
-        phrase = random.choice(negative_phrases)
+    for idx in range(num_samples):
         voice = random.choice(voices)
-        speed = random.uniform(0.85, 1.15)
-        output_file = os.path.join(neg_dir, f"neg_{idx:04d}.wav")
+        phrase = random.choice(negative_phrases)
+        output_file = os.path.join(neg_dir, f"neg_{idx:05d}.wav")
+        length_scale = random.uniform(0.9, 1.1)
+        synthesize(piper, voice, phrase, output_file,
+                   length_scale, 0.667, 0.8)
+        if (idx + 1) % 50 == 0:
+            print(f"  Generated {idx + 1}/{num_samples}")
 
-        try:
-            cmd = [
-                "piper",
-                "--model", voice,
-                "--output_file", output_file,
-                "--length-scale", str(1.0 / speed),
-            ]
-            subprocess.run(cmd, input=phrase, text=True, capture_output=True, timeout=30)
-            idx += 1
-        except Exception:
-            idx += 1  # Skip on error
-
-    print(f"Done. {num_samples} negative samples in {neg_dir}")
+    print(f"Done. Negative samples in {neg_dir}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate wake-word training dataset")
+    parser = argparse.ArgumentParser(description="Generate wake-word dataset")
     parser.add_argument("--wake-word", default="Hey Voxie", help="Wake word phrase")
     parser.add_argument("--output-dir", default="data", help="Output directory")
-    parser.add_argument("--num-positive", type=int, default=500, help="Number of positive samples")
-    parser.add_argument("--num-negative", type=int, default=200, help="Number of negative samples")
+    parser.add_argument("--voices-dir", default="voices",
+                        help="Directory containing Piper *.onnx voices")
+    parser.add_argument("--num-positive", type=int, default=500,
+                        help="Number of positive samples")
+    parser.add_argument("--num-negative", type=int, default=200,
+                        help="Number of negative samples")
+    parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
+    random.seed(args.seed)
+    piper = find_piper()
+    voices = find_voices(args.voices_dir)
+    print(f"Using piper: {piper}")
+    print(f"Voices: {[os.path.basename(v) for v in voices]}")
+
     os.makedirs(args.output_dir, exist_ok=True)
-    generate_positive_samples(args.wake_word, args.output_dir, args.num_positive)
-    generate_negative_samples(args.output_dir, args.num_negative)
+    generate_positive_samples(args.wake_word, voices, piper,
+                              args.output_dir, args.num_positive)
+    generate_negative_samples(voices, piper, args.output_dir, args.num_negative)
     print(f"\nDataset ready in {args.output_dir}/")
-    print("Next steps:")
-    print("  1. python augment.py --input-dir data/ --output-dir data_augmented/")
-    print("  2. python train.py --data-dir data_augmented/")
+    print("Next: python train.py --data-dir", args.output_dir)
 
 
 if __name__ == "__main__":
