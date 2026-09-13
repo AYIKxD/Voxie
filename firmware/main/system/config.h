@@ -1,5 +1,7 @@
 #pragma once
 
+#include "driver/gpio.h"
+
 // ============================================================================
 // Voxie Configuration — All compile-time constants and feature flags
 // ============================================================================

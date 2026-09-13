@@ -68,11 +68,10 @@ static void feature_task(void* arg) {
     ESP_LOGI(TAG, "Feature task started");
 
     while (kws_running) {
-        size_t bytes_read = 0;
         // Read samples from audio service
-        audio_service_read_mic((uint8_t*)audio_buffer, samples_per_frame * sizeof(int16_t), &bytes_read);
+        size_t samples_read = audio_service_read_mic(audio_buffer, samples_per_frame, 100);
         
-        if (bytes_read == samples_per_frame * sizeof(int16_t)) {
+        if (samples_read == samples_per_frame) {
             compute_features(audio_buffer, samples_per_frame, feature_buffer);
             xQueueSend(feature_queue, feature_buffer, portMAX_DELAY);
         } else {
@@ -128,8 +127,8 @@ static void kws_task(void* arg) {
                 detection_count++;
                 if (detection_count >= KWS_SMOOTHING_WINDOW) {
                     ESP_LOGI(TAG, "Wake word detected! Prob: %.2f", (double)detection_prob);
-                    // Fire the state machine event
-                    state_machine_set_event(EVT_WAKE_WORD_DETECTED);
+                    // Fire the wake-word event
+                    xEventGroupSetBits(state_machine_get_events(), EVT_WAKE_WORD_DETECTED);
                     detection_count = 0; // reset to avoid continuous triggering
                 }
             } else {

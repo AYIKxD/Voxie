@@ -1,19 +1,19 @@
 #include "iot_tools.h"
 #include "mcp/mcp_server.h"
 #include "system/config.h"
+#include "display/led_strip.h"
 #include "driver/gpio.h"
-#include "led_strip.h"
 #include "esp_random.h"
 #include "esp_log.h"
-#include <string.h>
-#include <stdio.h>
-#include <stdlib.h>
+#include <string>
+#include <cstring>
+#include <cstdio>
+#include <cstdlib>
 #include "cJSON.h"
 
 static const char* TAG = "iot_tools";
 
 static bool s_lamp_state = false;
-static led_strip_handle_t s_led_strip = NULL;
 
 void iot_tools_init(void) {
     ESP_LOGI(TAG, "Initializing IoT tools");
@@ -29,134 +29,110 @@ void iot_tools_init(void) {
     gpio_set_level((gpio_num_t)LAMP_RELAY_GPIO, 0);
     s_lamp_state = false;
 
-    // Init LED Strip
-    led_strip_config_t strip_config = {
-        .strip_gpio_num = LED_STRIP_GPIO,
-        .max_leds = LED_STRIP_NUM_LEDS,
-        .led_pixel_format = LED_PIXEL_FORMAT_GRB,
-        .led_model = LED_MODEL_WS2812,
-        .flags = { .invert_out = false },
-    };
-    led_strip_rmt_config_t rmt_config = {
-        .clk_src = RMT_CLK_SRC_DEFAULT,
-        .resolution_hz = 10 * 1000 * 1000, // 10MHz
-        .flags = { .with_dma = false },
-    };
-    ESP_ERROR_CHECK(led_strip_new_rmt_device(&strip_config, &rmt_config, &s_led_strip));
-    led_strip_clear(s_led_strip);
+    // The WS2812B strip task is created by led_strip_init() in app_main.
+    // Clear it to a known state here.
+    led_strip_set_color(0, 0, 0);
 }
 
-static McpResult handle_lamp_turn_on(const cJSON* params) {
+static McpResult handle_lamp_turn_on(const std::string &args) {
+    (void)args;
     gpio_set_level((gpio_num_t)LAMP_RELAY_GPIO, 1);
     s_lamp_state = true;
     ESP_LOGI(TAG, "Lamp turned ON");
-    McpResult res;
-    res.success = true;
-    res.output = strdup("Lamp is now ON");
-    return res;
+    return {"Lamp is now ON", false};
 }
 
-static McpResult handle_lamp_turn_off(const cJSON* params) {
+static McpResult handle_lamp_turn_off(const std::string &args) {
+    (void)args;
     gpio_set_level((gpio_num_t)LAMP_RELAY_GPIO, 0);
     s_lamp_state = false;
     ESP_LOGI(TAG, "Lamp turned OFF");
-    McpResult res;
-    res.success = true;
-    res.output = strdup("Lamp is now OFF");
-    return res;
+    return {"Lamp is now OFF", false};
 }
 
-static McpResult handle_lamp_get_state(const cJSON* params) {
-    McpResult res;
-    res.success = true;
-    if (s_lamp_state) {
-        res.output = strdup("Lamp is ON");
-    } else {
-        res.output = strdup("Lamp is OFF");
-    }
-    return res;
+static McpResult handle_lamp_get_state(const std::string &args) {
+    (void)args;
+    return {s_lamp_state ? "Lamp is ON" : "Lamp is OFF", false};
 }
 
-static McpResult handle_sensor_read_temperature(const cJSON* params) {
+static McpResult handle_sensor_read_temperature(const std::string &args) {
+    (void)args;
     // TODO: Wire real driver
     float temp = 25.0f + ((float)(esp_random() % 100) / 10.0f - 5.0f); // 20.0 to 30.0
     char buf[32];
     snprintf(buf, sizeof(buf), "%.1f", temp);
-    McpResult res;
-    res.success = true;
-    res.output = strdup(buf);
-    return res;
+    return {buf, false};
 }
 
-static McpResult handle_sensor_read_humidity(const cJSON* params) {
+static McpResult handle_sensor_read_humidity(const std::string &args) {
+    (void)args;
     // TODO: Wire real driver
     float hum = 60.0f + ((float)(esp_random() % 200) / 10.0f - 10.0f); // 50.0 to 70.0
     char buf[32];
     snprintf(buf, sizeof(buf), "%.1f", hum);
-    McpResult res;
-    res.success = true;
-    res.output = strdup(buf);
-    return res;
+    return {buf, false};
 }
 
-static McpResult handle_led_strip_set_color(const cJSON* params) {
-    McpResult res;
+static McpResult handle_led_strip_set_color(const std::string &args) {
+    cJSON *params = cJSON_Parse(args.c_str());
+    if (params == NULL) {
+        return {"Invalid JSON arguments", true};
+    }
+
     cJSON* r = cJSON_GetObjectItem(params, "r");
     cJSON* g = cJSON_GetObjectItem(params, "g");
     cJSON* b = cJSON_GetObjectItem(params, "b");
 
     if (!cJSON_IsNumber(r) || !cJSON_IsNumber(g) || !cJSON_IsNumber(b)) {
-        res.success = false;
-        res.output = strdup("Invalid or missing RGB parameters");
-        return res;
+        cJSON_Delete(params);
+        return {"Invalid or missing RGB parameters", true};
     }
 
     uint8_t red = (uint8_t)r->valueint;
     uint8_t green = (uint8_t)g->valueint;
     uint8_t blue = (uint8_t)b->valueint;
+    cJSON_Delete(params);
 
-    for (int i = 0; i < LED_STRIP_NUM_LEDS; i++) {
-        led_strip_set_pixel(s_led_strip, i, red, green, blue);
-    }
-    led_strip_refresh(s_led_strip);
+    led_strip_set_color(red, green, blue);
     ESP_LOGI(TAG, "LED set color: R:%d G:%d B:%d", red, green, blue);
-    
-    res.success = true;
-    res.output = strdup("LED color set");
-    return res;
+
+    return {"LED color set", false};
 }
 
-static McpResult handle_led_strip_set_brightness(const cJSON* params) {
-    McpResult res;
+static McpResult handle_led_strip_set_brightness(const std::string &args) {
+    cJSON *params = cJSON_Parse(args.c_str());
+    if (params == NULL) {
+        return {"Invalid JSON arguments", true};
+    }
     cJSON* brightness = cJSON_GetObjectItem(params, "brightness");
     if (!cJSON_IsNumber(brightness)) {
-         res.success = false;
-         res.output = strdup("Missing brightness parameter");
-         return res;
+        cJSON_Delete(params);
+        return {"Missing brightness parameter", true};
     }
-    ESP_LOGI(TAG, "LED set brightness: %d", brightness->valueint);
-    res.success = true;
-    res.output = strdup("LED brightness set");
-    return res;
+    int value = brightness->valueint;
+    cJSON_Delete(params);
+
+    // Local LED abstraction does not expose per-strip brightness yet.
+    ESP_LOGI(TAG, "LED set brightness: %d", value);
+    return {"LED brightness set", false};
 }
 
-static McpResult handle_led_strip_set_effect(const cJSON* params) {
-    McpResult res;
+static McpResult handle_led_strip_set_effect(const std::string &args) {
+    cJSON *params = cJSON_Parse(args.c_str());
+    if (params == NULL) {
+        return {"Invalid JSON arguments", true};
+    }
     cJSON* effect = cJSON_GetObjectItem(params, "effect");
     if (!cJSON_IsString(effect)) {
-        res.success = false;
-        res.output = strdup("Missing effect parameter");
-        return res;
+        cJSON_Delete(params);
+        return {"Missing effect parameter", true};
     }
-    ESP_LOGI(TAG, "LED set effect: %s", effect->valuestring);
-    
-    if (strcmp(effect->valuestring, "off") == 0) {
-        led_strip_clear(s_led_strip);
-    }
-    
-    res.success = true;
-    res.output = strdup("LED effect set");
-    return res;
+    std::string effect_name = effect->valuestring;
+    cJSON_Delete(params);
+
+    led_strip_set_effect(effect_name.c_str());
+    ESP_LOGI(TAG, "LED set effect: %s", effect_name.c_str());
+    return {"LED effect set", false};
 }
 
 void iot_tools_register(void) {
@@ -171,12 +147,12 @@ void iot_tools_register(void) {
 
     // LED tools
     mcp_server_add_tool(
-        "self.led_strip.set_color", 
-        "Set LED color", 
+        "self.led_strip.set_color",
+        "Set LED color",
         "{\"type\":\"object\",\"properties\":{\"r\":{\"type\":\"integer\"},\"g\":{\"type\":\"integer\"},\"b\":{\"type\":\"integer\"}},\"required\":[\"r\",\"g\",\"b\"]}",
         handle_led_strip_set_color
     );
-    
+
     mcp_server_add_tool(
         "self.led_strip.set_brightness",
         "Set LED brightness",

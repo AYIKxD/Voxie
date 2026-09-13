@@ -5,7 +5,7 @@
 #include "freertos/task.h"
 
 static const char* TAG = "LEDStrip";
-static device_state_t s_current_state = STATE_IDLE; // Assume STATE_IDLE is 0 or defined in state_machine.h
+static device_state_t s_current_state = DEVICE_STATE_IDLE_LISTENING;
 
 static void led_task(void *arg) {
     while (1) {

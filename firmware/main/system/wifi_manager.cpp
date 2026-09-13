@@ -90,7 +90,7 @@ static esp_err_t index_html_handler(httpd_req_t *req) {
 }
 
 static esp_err_t scan_handler(httpd_req_t *req) {
-    wifi_scan_config_t scan_config = {0};
+    wifi_scan_config_t scan_config = {};
     esp_wifi_scan_start(&scan_config, true);
     
     uint16_t ap_count = 0;
@@ -226,7 +226,7 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
         s_is_connected = true;
         
         // Notify state machine
-        xEventGroupSetBits(get_system_event_group(), EVT_WIFI_CONNECTED);
+        xEventGroupSetBits(state_machine_get_events(), EVT_WIFI_CONNECTED);
         
         // Sync time
         esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
@@ -245,14 +245,11 @@ static void start_softap_provisioning(void) {
     uint8_t mac[6];
     esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
     
-    wifi_config_t wifi_config = {
-        .ap = {
-            .channel = 1,
-            .max_connection = 4,
-            .authmode = WIFI_AUTH_OPEN
-        },
-    };
-    
+    wifi_config_t wifi_config = {};
+    wifi_config.ap.channel = 1;
+    wifi_config.ap.max_connection = 4;
+    wifi_config.ap.authmode = WIFI_AUTH_OPEN;
+
     snprintf((char*)wifi_config.ap.ssid, sizeof(wifi_config.ap.ssid), "%s-%02X%02X", SOFTAP_SSID_PREFIX, mac[4], mac[5]);
     wifi_config.ap.ssid_len = strlen((char*)wifi_config.ap.ssid);
     
@@ -277,7 +274,7 @@ static void start_sta_connection(const char* ssid, const char* password) {
         s_sta_netif = esp_netif_create_default_wifi_sta();
     }
     
-    wifi_config_t wifi_config = {0};
+    wifi_config_t wifi_config = {};
     strncpy((char*)wifi_config.sta.ssid, ssid, sizeof(wifi_config.sta.ssid) - 1);
     if (password != NULL) {
         strncpy((char*)wifi_config.sta.password, password, sizeof(wifi_config.sta.password) - 1);

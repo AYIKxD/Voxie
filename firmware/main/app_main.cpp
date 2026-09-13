@@ -5,6 +5,8 @@
  * The actual work happens in the tasks; this function just wires everything up.
  */
 #include <stdio.h>
+#include <string.h>
+#include <sys/time.h>
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "esp_event.h"
@@ -274,8 +276,8 @@ extern "C" void app_main(void) {
     led_strip_set_state(DEVICE_STATE_IDLE_LISTENING);
 
     // Connect to server
-    const char *server_url = wifi_manager_get_server_url();
-    if (server_url && strlen(server_url) > 0) {
+    char server_url[256] = {0};
+    if (wifi_manager_get_server_url(server_url, sizeof(server_url)) && strlen(server_url) > 0) {
         ws_protocol_connect(server_url);
     } else {
         ESP_LOGW(TAG, "No server URL configured, using default");

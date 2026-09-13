@@ -16,24 +16,22 @@ void display_manager_init(void) {
              LCD_PIN_MOSI, LCD_PIN_SCLK, LCD_PIN_CS, LCD_PIN_DC, LCD_PIN_RST, LCD_PIN_BL);
 
     // Initialize backlight PWM
-    ledc_timer_config_t ledc_timer = {
-        .speed_mode       = LEDC_LOW_SPEED_MODE,
-        .duty_resolution  = LEDC_TIMER_8_BIT,
-        .timer_num        = LEDC_TIMER_0,
-        .freq_hz          = 4000,
-        .clk_cfg          = LEDC_AUTO_CLK
-    };
+    ledc_timer_config_t ledc_timer = {};
+    ledc_timer.speed_mode      = LEDC_LOW_SPEED_MODE;
+    ledc_timer.duty_resolution = LEDC_TIMER_8_BIT;
+    ledc_timer.timer_num       = LEDC_TIMER_0;
+    ledc_timer.freq_hz         = 4000;
+    ledc_timer.clk_cfg         = LEDC_AUTO_CLK;
     ledc_timer_config(&ledc_timer);
 
-    ledc_channel_config_t ledc_channel = {
-        .gpio_num       = LCD_PIN_BL,
-        .speed_mode     = LEDC_LOW_SPEED_MODE,
-        .channel        = LEDC_CHANNEL_0,
-        .intr_type      = LEDC_INTR_DISABLE,
-        .timer_sel      = LEDC_TIMER_0,
-        .duty           = 128,
-        .hpoint         = 0
-    };
+    ledc_channel_config_t ledc_channel = {};
+    ledc_channel.gpio_num   = LCD_PIN_BL;
+    ledc_channel.speed_mode = LEDC_LOW_SPEED_MODE;
+    ledc_channel.channel    = LEDC_CHANNEL_0;
+    ledc_channel.intr_type  = LEDC_INTR_DISABLE;
+    ledc_channel.timer_sel  = LEDC_TIMER_0;
+    ledc_channel.duty       = 128;
+    ledc_channel.hpoint     = 0;
     ledc_channel_config(&ledc_channel);
 
 #ifdef VOXIE_HAS_LVGL

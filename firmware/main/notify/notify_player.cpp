@@ -8,6 +8,7 @@
 #include "freertos/task.h"
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 
 static const char *TAG = "notify";
 
