@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+websockets
+faster-whisper
+torch
+torchaudio
+openai
+anthropic
+google-generativeai
+opuslib
+numpy

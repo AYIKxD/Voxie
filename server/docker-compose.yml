@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  voxie-server:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - LLM_PROVIDER=openai
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - WHISPER_MODEL=base
+      - PIPER_VOICE=en_US-lessac-medium
+    volumes:
+      - ./model_cache:/root/.cache
