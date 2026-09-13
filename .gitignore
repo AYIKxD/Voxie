@@ -17,6 +17,7 @@ training/output/
 training/voices/
 training/assets/
 server/.env
+server/model_cache/
 
 # Build / training logs
 *.log
