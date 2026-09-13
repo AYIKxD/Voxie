@@ -2,6 +2,10 @@ import os
 import logging
 import asyncio
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 logger = logging.getLogger(__name__)
 
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "openai").lower()
@@ -17,6 +21,8 @@ async def generate_reply(transcript: str, history: list, tools: list = None) -> 
         return await _generate_openai(transcript, history, tools)
     elif LLM_PROVIDER == "anthropic":
         return await _generate_anthropic(transcript, history, tools)
+    elif LLM_PROVIDER == "gemini":
+        return await _generate_gemini(transcript, history, tools)
     else:
         # Default mock for testing
         logger.warning("Using mock LLM provider")
@@ -49,6 +55,43 @@ async def _generate_openai(transcript: str, history: list, tools: list):
             })
             
     return reply, tool_calls
+
+async def _generate_gemini(transcript: str, history: list, tools: list):
+    from google import genai
+
+    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        logger.error("GEMINI_API_KEY is not set")
+        return "Gemini API key is not configured.", []
+
+    model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+
+    # Convert OpenAI-style history (roles "user"/"assistant") to Gemini contents.
+    contents = []
+    for msg in history:
+        role = "user" if msg.get("role") == "user" else "model"
+        contents.append({"role": role, "parts": [{"text": msg.get("content", "")}]})
+
+    def _call():
+        client = genai.Client(api_key=api_key)
+        return client.models.generate_content(
+            model=model_name,
+            contents=contents,
+            config={
+                "system_instruction": "You are Voxie, a concise and helpful voice assistant."
+            },
+        )
+
+    try:
+        response = await asyncio.to_thread(_call)
+        reply = (response.text or "").strip()
+    except Exception as e:
+        logger.error(f"Gemini request failed: {e}")
+        return "Sorry, I couldn't reach the language model.", []
+
+    # Tool-call support for Gemini can be added alongside MCP formatting.
+    return reply, []
+
 
 async def _generate_anthropic(transcript: str, history: list, tools: list):
     import anthropic

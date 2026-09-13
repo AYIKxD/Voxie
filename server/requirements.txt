@@ -6,6 +6,7 @@ torch
 torchaudio
 openai
 anthropic
-google-generativeai
+google-genai
+python-dotenv
 opuslib
 numpy
