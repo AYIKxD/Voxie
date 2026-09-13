@@ -2,6 +2,7 @@
 #include "system/config.h"
 #include "system/state_machine.h"
 #include "audio/audio_service.h"
+#include "audio/stream_service.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -73,6 +74,11 @@ static void feature_task(void* arg) {
 
     while (kws_running) {
         size_t samples_read = audio_service_read_mic(chunk, samples_per_frame, 100);
+        if (samples_read == 0) {
+            continue;
+        }
+        // Feed the streaming/pre-roll pipeline (non-blocking).
+        stream_service_push_mic(chunk, samples_read);
         if (samples_read != samples_per_frame) {
             continue;
         }

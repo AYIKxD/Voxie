@@ -18,6 +18,7 @@
 #include "system/wifi_manager.h"
 #include "system/ota_manager.h"
 #include "audio/audio_service.h"
+#include "audio/stream_service.h"
 #include "kws/kws_engine.h"
 #include "protocol/websocket_protocol.h"
 #include "display/display_manager.h"
@@ -137,12 +138,8 @@ static void on_ws_text_message(const char *json_str, size_t len) {
 
 /// Handle incoming binary messages (Opus TTS audio from cloud)
 static void on_ws_binary_message(const uint8_t *data, size_t len) {
-    // Binary frames are Opus-encoded TTS audio
-    // TODO: strip binary header, decode Opus → PCM, write to playback buffer
-    // For now, treat as raw PCM (will be replaced when Opus is integrated)
-    if (len > 0 && state_machine_get_state() == DEVICE_STATE_PLAYING_REPLY) {
-        audio_service_write_playback((const int16_t *)data, len / sizeof(int16_t), 100);
-    }
+    // Binary frames are header + Opus-encoded TTS audio from the cloud.
+    stream_service_handle_tts(data, len);
 }
 
 // ============================================================================
@@ -165,6 +162,7 @@ static void main_event_task(void *arg) {
             if (current == DEVICE_STATE_PLAYING_REPLY) {
                 // Barge-in: stop current playback, start new stream
                 ESP_LOGI(TAG, "Barge-in detected!");
+                stream_service_flush_tts();
                 audio_service_flush_playback();
                 ws_protocol_send_abort();
             }
@@ -181,6 +179,7 @@ static void main_event_task(void *arg) {
                 uint64_t wake_ts_us = (uint64_t)tv.tv_sec * 1000000 + tv.tv_usec;
 
                 ws_protocol_send_stream_start(wake_ts_us);
+                stream_service_start();
                 ESP_LOGI(TAG, "Streaming started (wake_ts=%llu us)",
                          (unsigned long long)wake_ts_us);
             }
@@ -231,6 +230,9 @@ extern "C" void app_main(void) {
     // --- 5. Initialize audio subsystem (I2S mic + speaker) ---
     audio_service_init();
     audio_service_start();
+
+    // --- 5b. Initialize the Opus streaming service (pre-roll + codec) ---
+    stream_service_init();
 
     // --- 6. Initialize KWS engine (feature extraction + inference) ---
     kws_engine_init();
