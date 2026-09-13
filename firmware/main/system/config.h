@@ -95,8 +95,9 @@
 #define KWS_FEATURE_STRIDE_MS    10
 #define KWS_FEATURE_SIZE         40
 #define KWS_STREAMING_SLICES     3    // microWakeWord streaming input window
-#define KWS_DETECTION_THRESHOLD  0.90f
-#define KWS_SMOOTHING_WINDOW     5    // consecutive frames above threshold to trigger
+#define KWS_AVG_WINDOW           5    // moving-average window over frame probabilities
+#define KWS_DETECTION_THRESHOLD  0.50f
+#define KWS_SMOOTHING_WINDOW     3    // consecutive averaged frames above threshold to trigger
 
 // --- Network ---
 #define WS_RECONNECT_INTERVAL_MS 5000
