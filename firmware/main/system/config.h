@@ -34,7 +34,16 @@
 #define VOXIE_ENABLE_LED_STRIP   1
 #endif
 
+// --- ML / codec backends (provided by managed components) ---
+// TFLite Micro is used by the KWS engine for on-device wake-word inference.
+#ifndef VOXIE_HAS_TFLITE
+#define VOXIE_HAS_TFLITE         1
+#endif
+
 // --- I2S Mic (RX) - I2S_NUM_0 ---
+// ICS43434 I2S MEMS mic. Pinout is identical to the INMP441 (WS/SCK/SD/L-R),
+// so no wiring or firmware change is required to swap between them.
+// Tie L/R (select) to GND for left-channel/mono capture.
 #define MIC_I2S_NUM              I2S_NUM_0
 #define MIC_I2S_WS               GPIO_NUM_4
 #define MIC_I2S_SCK              GPIO_NUM_5
@@ -82,9 +91,10 @@
 #define PRE_ROLL_BUFFER_MS       800
 
 // --- KWS ---
-#define KWS_FEATURE_STRIDE_MS    20
+#define KWS_FEATURE_STRIDE_MS    10
 #define KWS_FEATURE_SIZE         40
-#define KWS_DETECTION_THRESHOLD  0.85f
+#define KWS_STREAMING_SLICES     3    // microWakeWord streaming input window
+#define KWS_DETECTION_THRESHOLD  0.90f
 #define KWS_SMOOTHING_WINDOW     5    // consecutive frames above threshold to trigger
 
 // --- Network ---

@@ -92,6 +92,13 @@ static void kws_task(void* arg) {
     float feature_frame[KWS_FEATURE_SIZE];
     int detection_count = 0;
 
+#ifdef VOXIE_HAS_TFLITE
+    // microWakeWord streaming models consume a sliding window of the most
+    // recent feature slices, e.g. an input shape of [1, 3, 40].
+    static int8_t feature_window[KWS_STREAMING_SLICES][KWS_FEATURE_SIZE];
+    int window_fill = 0;
+#endif
+
     ESP_LOGI(TAG, "KWS task started");
 
     while (kws_running) {
@@ -99,20 +106,40 @@ static void kws_task(void* arg) {
             float detection_prob = 0.0f;
 
 #ifdef VOXIE_HAS_TFLITE
-            if (input_tensor && input_tensor->type == kTfLiteFloat32) {
-                memcpy(input_tensor->data.f, feature_frame, KWS_FEATURE_SIZE * sizeof(float));
-            } else if (input_tensor && input_tensor->type == kTfLiteInt8) {
-                for(int i = 0; i < KWS_FEATURE_SIZE; i++) {
-                    input_tensor->data.int8[i] = (int8_t)(feature_frame[i] / input_tensor->params.scale + input_tensor->params.zero_point);
-                }
+            if (input_tensor == nullptr || output_tensor == nullptr) {
+                continue;
+            }
+
+            const float in_scale = input_tensor->params.scale;
+            const int in_zero = input_tensor->params.zero_point;
+
+            // Shift the window left by one slice and append the newest frame.
+            for (int s = 0; s < KWS_STREAMING_SLICES - 1; s++) {
+                memcpy(feature_window[s], feature_window[s + 1], KWS_FEATURE_SIZE);
+            }
+            for (int i = 0; i < KWS_FEATURE_SIZE; i++) {
+                feature_window[KWS_STREAMING_SLICES - 1][i] =
+                    (int8_t)(feature_frame[i] / in_scale + in_zero);
+            }
+
+            if (window_fill < KWS_STREAMING_SLICES) {
+                window_fill++;
+                continue;  // need a full window before inferring
+            }
+
+            if (input_tensor->type == kTfLiteInt8) {
+                memcpy(input_tensor->data.int8, feature_window,
+                       KWS_STREAMING_SLICES * KWS_FEATURE_SIZE);
             }
 
             TfLiteStatus invoke_status = interpreter->Invoke();
             if (invoke_status == kTfLiteOk) {
-                if (output_tensor->type == kTfLiteFloat32) {
-                    detection_prob = output_tensor->data.f[1]; // assuming class 1 is wake word
+                if (output_tensor->type == kTfLiteUInt8) {
+                    detection_prob = (output_tensor->data.uint8[0] - output_tensor->params.zero_point) * output_tensor->params.scale;
                 } else if (output_tensor->type == kTfLiteInt8) {
-                    detection_prob = (output_tensor->data.int8[1] - output_tensor->params.zero_point) * output_tensor->params.scale;
+                    detection_prob = (output_tensor->data.int8[0] - output_tensor->params.zero_point) * output_tensor->params.scale;
+                } else if (output_tensor->type == kTfLiteFloat32) {
+                    detection_prob = output_tensor->data.f[0];
                 }
             } else {
                 ESP_LOGE(TAG, "TFLite invoke failed");
@@ -158,13 +185,21 @@ extern "C" void kws_engine_init(void) {
         return;
     }
 
-    // Include basic ops for a typical microWakeWord style streaming network
-    static tflite::MicroMutableOpResolver<5> micro_op_resolver;
-    micro_op_resolver.AddFullyConnected();
-    micro_op_resolver.AddDepthwiseConv2D();
+    // Exact op set used by the trained microWakeWord streaming model.
+    static tflite::MicroMutableOpResolver<13> micro_op_resolver;
     micro_op_resolver.AddConv2D();
+    micro_op_resolver.AddDepthwiseConv2D();
+    micro_op_resolver.AddFullyConnected();
     micro_op_resolver.AddReshape();
-    micro_op_resolver.AddSoftmax();
+    micro_op_resolver.AddLogistic();
+    micro_op_resolver.AddConcatenation();
+    micro_op_resolver.AddSplitV();
+    micro_op_resolver.AddStridedSlice();
+    micro_op_resolver.AddQuantize();
+    micro_op_resolver.AddCallOnce();
+    micro_op_resolver.AddVarHandle();
+    micro_op_resolver.AddReadVariable();
+    micro_op_resolver.AddAssignVariable();
 
     static tflite::MicroInterpreter static_interpreter(
         model, micro_op_resolver, tensor_arena, kTensorArenaSize);
