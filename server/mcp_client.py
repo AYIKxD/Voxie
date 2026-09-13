@@ -1,71 +1,80 @@
+import asyncio
 import json
 import logging
-import asyncio
 
 logger = logging.getLogger(__name__)
 
+
 class McpClient:
+    """MCP client that talks JSON-RPC to the device's MCP server over the WS.
+
+    Each request gets a unique id; the response resolves the matching Future
+    from the WebSocket receive loop via `handle_message`.
+    """
+
     def __init__(self):
         self.request_id = 0
-        self.pending_requests = {}
+        self.pending = {}
         self.tools = []
 
-    async def initialize(self, websocket):
+    async def _request(self, websocket, method: str, params: dict | None = None,
+                       timeout: float = 8.0):
         self.request_id += 1
         req_id = self.request_id
-        
-        msg = {
-            "type": "mcp",
-            "id": req_id,
-            "method": "mcp:initialize",
-            "params": {
-                "clientInfo": {"name": "VoxieServer", "version": "1.0"}
-            }
-        }
+        fut = asyncio.get_event_loop().create_future()
+        self.pending[req_id] = fut
+
+        msg = {"type": "mcp", "id": req_id, "method": method}
+        if params is not None:
+            msg["params"] = params
         await websocket.send_text(json.dumps(msg))
-        
-        # In a real app, you would wait on an asyncio Event for the response ID
-        logger.info("Sent mcp:initialize")
+        logger.info(f"Sent MCP {method} (id={req_id})")
+
+        try:
+            return await asyncio.wait_for(fut, timeout)
+        except asyncio.TimeoutError:
+            self.pending.pop(req_id, None)
+            logger.warning(f"MCP {method} (id={req_id}) timed out")
+            return None
+
+    def handle_message(self, data: dict):
+        """Resolve a pending request from an MCP response message."""
+        req_id = data.get("id")
+        fut = self.pending.pop(req_id, None)
+        if fut is None or fut.done():
+            return
+        if "error" in data:
+            fut.set_exception(
+                RuntimeError(data["error"].get("message", "MCP error"))
+            )
+        else:
+            fut.set_result(data.get("result"))
+
+    async def initialize(self, websocket):
+        return await self._request(
+            websocket, "initialize",
+            {"clientInfo": {"name": "VoxieServer", "version": "1.0"}})
 
     async def list_tools(self, websocket):
-        self.request_id += 1
-        req_id = self.request_id
-        
-        msg = {
-            "type": "mcp",
-            "id": req_id,
-            "method": "mcp:tools/list"
-        }
-        await websocket.send_text(json.dumps(msg))
-        logger.info("Sent mcp:tools/list")
-        
-        # Simplified: returning empty list. In practice, wait for matching response.
-        return self.tools
+        tools = []
+        cursor = None
+        while True:
+            params = {"cursor": cursor} if cursor else None
+            result = await self._request(websocket, "tools/list", params)
+            if not result:
+                break
+            tools.extend(result.get("tools", []))
+            cursor = result.get("nextCursor")
+            if not cursor:
+                break
+        self.tools = tools
+        return tools
 
-    async def call_tool(self, websocket, name: str, arguments: str):
-        self.request_id += 1
-        req_id = self.request_id
-        
-        try:
-            args_dict = json.loads(arguments) if isinstance(arguments, str) else arguments
-        except:
-            args_dict = {}
-            
-        msg = {
-            "type": "mcp",
-            "id": req_id,
-            "method": "mcp:tools/call",
-            "params": {
-                "name": name,
-                "arguments": args_dict
-            }
-        }
-        await websocket.send_text(json.dumps(msg))
-        logger.info(f"Sent mcp:tools/call for {name}")
-        return {"status": "pending"}
-
-    def handle_response(self, data: dict):
-        resp_id = data.get("id")
-        if resp_id in self.pending_requests:
-            logger.info(f"Received MCP response for id {resp_id}")
-            # Set event for waiter...
+    async def call_tool(self, websocket, name: str, arguments):
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments) if arguments else {}
+            except json.JSONDecodeError:
+                arguments = {}
+        return await self._request(
+            websocket, "tools/call", {"name": name, "arguments": arguments or {}})

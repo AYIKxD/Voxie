@@ -10,54 +10,68 @@ logger = logging.getLogger(__name__)
 
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "openai").lower()
 
-async def generate_reply(transcript: str, history: list, tools: list = None) -> tuple[str, list]:
+SYSTEM_PROMPT = (
+    "You are Voxie, a concise and helpful voice assistant running on an ESP32-S3 "
+    "device. Keep spoken replies short (1-3 sentences). When the user asks you to "
+    "control the device (lamp, LEDs, volume, display), call the appropriate tool."
+)
+
+
+def _tools_to_gemini(tools):
+    from google.genai import types
+
+    decls = []
+    for t in tools or []:
+        schema = t.get("inputSchema") or {"type": "object", "properties": {}}
+        decls.append(
+            types.FunctionDeclaration(
+                name=t.get("name", ""),
+                description=t.get("description", ""),
+                parameters=schema,
+            )
+        )
+    return [types.Tool(function_declarations=decls)] if decls else None
+
+
+def _tools_to_openai(tools):
+    out = []
+    for t in tools or []:
+        out.append({
+            "type": "function",
+            "function": {
+                "name": t.get("name", ""),
+                "description": t.get("description", ""),
+                "parameters": t.get("inputSchema") or {"type": "object", "properties": {}},
+            },
+        })
+    return out or None
+
+
+async def generate_reply(history: list, tools: list = None) -> tuple[str, list]:
+    """Generate a reply from the conversation history.
+
+    history: list of {"role": "user"|"assistant", "content": str}
+    tools:   list of MCP tool definitions (name/description/inputSchema)
+    Returns (reply_text, tool_calls) where tool_calls is a list of
+    {"name": str, "arguments": dict}.
     """
-    Generates a reply using the configured LLM provider.
-    Returns (reply_text, tool_calls).
-    """
-    logger.info(f"Using LLM provider: {LLM_PROVIDER}")
-    
+    logger.info(f"LLM provider: {LLM_PROVIDER}, {len(tools or [])} tools available")
+
+    if LLM_PROVIDER == "gemini":
+        return await _generate_gemini(history, tools)
     if LLM_PROVIDER == "openai":
-        return await _generate_openai(transcript, history, tools)
-    elif LLM_PROVIDER == "anthropic":
-        return await _generate_anthropic(transcript, history, tools)
-    elif LLM_PROVIDER == "gemini":
-        return await _generate_gemini(transcript, history, tools)
-    else:
-        # Default mock for testing
-        logger.warning("Using mock LLM provider")
-        return f"I heard you say: {transcript}", []
+        return await _generate_openai(history, tools)
+    if LLM_PROVIDER == "anthropic":
+        return await _generate_anthropic(history, tools)
 
-async def _generate_openai(transcript: str, history: list, tools: list):
-    import openai
-    client = openai.AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-    
-    messages = [{"role": "system", "content": "You are a helpful voice assistant."}]
-    messages.extend(history)
-    
-    # Note: formatting MCP tools to OpenAI format should be done here
-    # For now, we skip tool formatting in this snippet.
-    
-    response = await client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=messages
-    )
-    
-    msg = response.choices[0].message
-    reply = msg.content if msg.content else ""
-    tool_calls = []
-    
-    if msg.tool_calls:
-        for tc in msg.tool_calls:
-            tool_calls.append({
-                "name": tc.function.name,
-                "arguments": tc.function.arguments
-            })
-            
-    return reply, tool_calls
+    logger.warning("Using mock LLM provider")
+    last = history[-1]["content"] if history else ""
+    return f"I heard you say: {last}", []
 
-async def _generate_gemini(transcript: str, history: list, tools: list):
+
+async def _generate_gemini(history: list, tools: list):
     from google import genai
+    from google.genai import types
 
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not api_key:
@@ -66,46 +80,94 @@ async def _generate_gemini(transcript: str, history: list, tools: list):
 
     model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
-    # Convert OpenAI-style history (roles "user"/"assistant") to Gemini contents.
     contents = []
-    for msg in history:
-        role = "user" if msg.get("role") == "user" else "model"
-        contents.append({"role": role, "parts": [{"text": msg.get("content", "")}]})
+    for m in history:
+        role = "user" if m.get("role") == "user" else "model"
+        contents.append(types.Content(role=role, parts=[types.Part(text=m.get("content", ""))]))
+
+    config = types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT)
+    tool_decls = _tools_to_gemini(tools)
+    if tool_decls:
+        config.tools = tool_decls
 
     def _call():
         client = genai.Client(api_key=api_key)
         return client.models.generate_content(
-            model=model_name,
-            contents=contents,
-            config={
-                "system_instruction": "You are Voxie, a concise and helpful voice assistant."
-            },
-        )
+            model=model_name, contents=contents, config=config)
 
     try:
         response = await asyncio.to_thread(_call)
-        reply = (response.text or "").strip()
     except Exception as e:
         logger.error(f"Gemini request failed: {e}")
         return "Sorry, I couldn't reach the language model.", []
 
-    # Tool-call support for Gemini can be added alongside MCP formatting.
-    return reply, []
+    reply = ""
+    try:
+        reply = (response.text or "").strip()
+    except Exception:
+        reply = ""
+
+    tool_calls = []
+    for fc in (getattr(response, "function_calls", None) or []):
+        args = dict(fc.args) if getattr(fc, "args", None) else {}
+        tool_calls.append({"name": fc.name, "arguments": args})
+
+    return reply, tool_calls
 
 
-async def _generate_anthropic(transcript: str, history: list, tools: list):
+async def _generate_openai(history: list, tools: list):
+    import openai
+
+    client = openai.AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + history
+
+    kwargs = {"model": os.environ.get("OPENAI_MODEL", "gpt-4o-mini"), "messages": messages}
+    tool_spec = _tools_to_openai(tools)
+    if tool_spec:
+        kwargs["tools"] = tool_spec
+
+    response = await client.chat.completions.create(**kwargs)
+    msg = response.choices[0].message
+    reply = msg.content or ""
+    tool_calls = []
+    for tc in (msg.tool_calls or []):
+        import json
+        try:
+            args = json.loads(tc.function.arguments or "{}")
+        except json.JSONDecodeError:
+            args = {}
+        tool_calls.append({"name": tc.function.name, "arguments": args})
+    return reply, tool_calls
+
+
+async def _generate_anthropic(history: list, tools: list):
     import anthropic
+
     client = anthropic.AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
-    
-    # Simplified mapping
-    system = "You are a helpful voice assistant."
-    
-    response = await client.messages.create(
-        model="claude-3-haiku-20240307",
-        max_tokens=1024,
-        system=system,
-        messages=history
-    )
-    
-    reply = response.content[0].text if response.content else ""
-    return reply, []
+    messages = [m for m in history if m.get("role") in ("user", "assistant")]
+
+    kwargs = {
+        "model": os.environ.get("ANTHROPIC_MODEL", "claude-3-5-haiku-latest"),
+        "max_tokens": 512,
+        "system": SYSTEM_PROMPT,
+        "messages": messages,
+    }
+    if tools:
+        kwargs["tools"] = [
+            {
+                "name": t.get("name", ""),
+                "description": t.get("description", ""),
+                "input_schema": t.get("inputSchema") or {"type": "object", "properties": {}},
+            }
+            for t in tools
+        ]
+
+    response = await client.messages.create(**kwargs)
+    reply = ""
+    tool_calls = []
+    for block in response.content:
+        if block.type == "text":
+            reply += block.text
+        elif block.type == "tool_use":
+            tool_calls.append({"name": block.name, "arguments": block.input or {}})
+    return reply, tool_calls
