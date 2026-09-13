@@ -178,6 +178,12 @@ std::string mcp_server_handle_request(const std::string &request_json) {
     int id = json_get_int(request_json, "id");
     std::string method = json_get_string(request_json, "method");
 
+    // The cloud MCP client prefixes methods with "mcp:" (e.g. "mcp:tools/call").
+    // Normalize to the bare method name used by the handlers.
+    if (method.rfind("mcp:", 0) == 0) {
+        method = method.substr(4);
+    }
+
     ESP_LOGI(TAG, "MCP request: method=%s id=%d", method.c_str(), id);
 
     if (method == "initialize") {
