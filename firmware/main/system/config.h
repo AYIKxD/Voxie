@@ -27,7 +27,7 @@
 #endif
 
 #ifndef VOXIE_ENABLE_LCD
-#define VOXIE_ENABLE_LCD         1   // ST7789 LCD; set 0 for OLED-only
+#define VOXIE_ENABLE_LCD         0   // 0 = SSD1306 OLED (current wiring), 1 = ST7789 LCD
 #endif
 
 #ifndef VOXIE_ENABLE_LED_STRIP
@@ -52,10 +52,11 @@
 #define MIC_BITS_PER_SAMPLE      16
 
 // --- I2S Speaker (TX) - I2S_NUM_1 ---
+// MAX98357A: WS/LRC, SCK/BCLK, SD/DIN (match the actual wiring).
 #define SPK_I2S_NUM              I2S_NUM_1
-#define SPK_I2S_WS               GPIO_NUM_15
-#define SPK_I2S_SCK              GPIO_NUM_16
-#define SPK_I2S_SD               GPIO_NUM_17
+#define SPK_I2S_WS               GPIO_NUM_7    // MAX98357A LRC
+#define SPK_I2S_SCK              GPIO_NUM_15   // MAX98357A BCLK
+#define SPK_I2S_SD               GPIO_NUM_16   // MAX98357A DIN
 
 // --- SPI LCD (ST7789) ---
 #define LCD_SPI_HOST             SPI2_HOST
@@ -68,9 +69,9 @@
 #define LCD_WIDTH                240
 #define LCD_HEIGHT               280
 
-// --- I2C OLED (SSD1306 fallback) ---
-#define OLED_I2C_SDA             GPIO_NUM_8
-#define OLED_I2C_SCL             GPIO_NUM_9
+// --- I2C OLED (SSD1306) ---
+#define OLED_I2C_SDA             GPIO_NUM_41
+#define OLED_I2C_SCL             GPIO_NUM_42
 #define OLED_WIDTH               128
 #define OLED_HEIGHT              64
 
