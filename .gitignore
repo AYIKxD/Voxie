@@ -26,7 +26,6 @@ Thumbs.db
 
 # Backup
 *.bak
-build.md
 
 # Reference project (not part of Voxie)
 xiaozhi/
