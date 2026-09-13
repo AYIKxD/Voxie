@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   voxie-server:
     build: .
@@ -12,6 +10,6 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - WHISPER_MODEL=${WHISPER_MODEL:-base}
-      - PIPER_VOICE=${PIPER_VOICE:-en_US-lessac-medium}
+      - PIPER_VOICE=${PIPER_VOICE:-/app/voices/en_US-lessac-medium.onnx}
     volumes:
       - ./model_cache:/root/.cache

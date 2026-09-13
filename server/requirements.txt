@@ -2,11 +2,12 @@ fastapi
 uvicorn[standard]
 websockets
 faster-whisper
-torch
-torchaudio
+# NOTE: torch/torchaudio are installed separately as CPU-only wheels in the
+# Dockerfile (the default PyPI wheels pull multi-GB CUDA runtime packages).
 openai
 anthropic
 google-genai
 python-dotenv
 opuslib
+piper-tts
 numpy
