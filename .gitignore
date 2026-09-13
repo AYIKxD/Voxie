@@ -14,7 +14,12 @@ __pycache__/
 venv/
 training/data/
 training/output/
+training/voices/
+training/assets/
 server/.env
+
+# Build / training logs
+*.log
 
 # OS / Editor
 .DS_Store
