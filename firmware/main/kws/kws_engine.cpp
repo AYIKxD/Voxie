@@ -9,8 +9,10 @@
 #include <string.h>
 
 #ifdef VOXIE_HAS_TFLITE
+#include "tensorflow/lite/micro/micro_allocator.h"
 #include "tensorflow/lite/micro/micro_interpreter.h"
 #include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
+#include "tensorflow/lite/micro/micro_resource_variable.h"
 #include "tensorflow/lite/micro/system_setup.h"
 #include "tensorflow/lite/schema/schema_generated.h"
 #endif
@@ -25,8 +27,11 @@ extern const uint8_t model_data_tflite_end[] asm("_binary_model_data_tflite_end"
 
 #ifdef VOXIE_HAS_TFLITE
 constexpr int kTensorArenaSize = 64 * 1024;
+constexpr int kMaxResourceVariables = 8;
 static uint8_t tensor_arena[kTensorArenaSize];
 static const tflite::Model* model = nullptr;
+static tflite::MicroAllocator* allocator = nullptr;
+static tflite::MicroResourceVariables* resource_variables = nullptr;
 static tflite::MicroInterpreter* interpreter = nullptr;
 static TfLiteTensor* input_tensor = nullptr;
 static TfLiteTensor* output_tensor = nullptr;
@@ -201,8 +206,23 @@ extern "C" void kws_engine_init(void) {
     micro_op_resolver.AddReadVariable();
     micro_op_resolver.AddAssignVariable();
 
+    // microWakeWord streaming models keep state in TFLM resource variables
+    // (VAR_HANDLE / READ_VARIABLE / ASSIGN_VARIABLE), which must be supplied
+    // to the interpreter explicitly.
+    allocator = tflite::MicroAllocator::Create(tensor_arena, kTensorArenaSize);
+    if (allocator == nullptr) {
+        ESP_LOGE(TAG, "Failed to create TFLM allocator");
+        return;
+    }
+    resource_variables =
+        tflite::MicroResourceVariables::Create(allocator, kMaxResourceVariables);
+    if (resource_variables == nullptr) {
+        ESP_LOGE(TAG, "Failed to create TFLM resource variables");
+        return;
+    }
+
     static tflite::MicroInterpreter static_interpreter(
-        model, micro_op_resolver, tensor_arena, kTensorArenaSize);
+        model, micro_op_resolver, allocator, resource_variables);
     interpreter = &static_interpreter;
 
     if (interpreter->AllocateTensors() != kTfLiteOk) {
