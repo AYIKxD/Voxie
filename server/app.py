@@ -116,6 +116,17 @@ async def websocket_endpoint(websocket: WebSocket):
 
 async def _process_utterance(websocket, mcp_client, encoder, history, pcm):
     try:
+        # Debug: keep the most recent utterance for inspection.
+        try:
+            import wave as _wave
+            with _wave.open("/root/.cache/voxie_last_utterance.wav", "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                wf.writeframes(pcm)
+        except Exception:
+            pass
+
         transcript = transcribe(pcm, 16000)
         logger.info(f"Transcript: {transcript!r}")
         if not transcript:
