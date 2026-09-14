@@ -207,7 +207,12 @@ static void kws_task(void* arg) {
             detection_count++;
             if (detection_count >= KWS_SMOOTHING_WINDOW) {
                 ESP_LOGI(TAG, "Wake word detected! Prob: %.2f", (double)avg_prob);
-                xEventGroupSetBits(state_machine_get_events(), EVT_WAKE_WORD_DETECTED);
+                device_state_t st = state_machine_get_state();
+                if (st == DEVICE_STATE_IDLE_LISTENING || st == DEVICE_STATE_PLAYING_REPLY) {
+                    xEventGroupSetBits(state_machine_get_events(), EVT_WAKE_WORD_DETECTED);
+                } else {
+                    ESP_LOGI(TAG, "Ignoring wake word (wrong state: %d)", (int)st);
+                }
                 detection_count = 0;
                 hist_count = 0;  // reset averaging after a detection
                 memset(prob_history, 0, sizeof(prob_history));

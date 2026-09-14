@@ -23,7 +23,7 @@
 #include "kws/kws_engine.h"
 #include "protocol/websocket_protocol.h"
 #include "display/display_manager.h"
-#include "display/led_strip.h"
+#include "display/voxie_led.h"
 #include "notify/notify_player.h"
 
 #if VOXIE_ENABLE_MCP
@@ -223,7 +223,10 @@ static void button_task(void *arg) {
         int level = gpio_get_level((gpio_num_t)BUTTON_GPIO);
         if (last == 1 && level == 0) {
             ESP_LOGI(TAG, "Button pressed -> triggering wake");
-            xEventGroupSetBits(state_machine_get_events(), EVT_WAKE_WORD_DETECTED);
+            device_state_t st = state_machine_get_state();
+            if (st == DEVICE_STATE_IDLE_LISTENING || st == DEVICE_STATE_PLAYING_REPLY) {
+                xEventGroupSetBits(state_machine_get_events(), EVT_WAKE_WORD_DETECTED);
+            }
         }
         last = level;
         vTaskDelay(pdMS_TO_TICKS(20));
