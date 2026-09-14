@@ -1,7 +1,7 @@
 #include "iot_tools.h"
 #include "mcp/mcp_server.h"
 #include "system/config.h"
-#include "display/led_strip.h"
+#include "display/voxie_led.h"
 #include "driver/gpio.h"
 #include "esp_random.h"
 #include "esp_log.h"
