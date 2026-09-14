@@ -41,7 +41,7 @@ def transcribe(pcm_audio: bytes, sample_rate: int) -> str:
     wav_io.seek(0)
 
     t0 = time.time()
-    segments, info = model.transcribe(wav_io, beam_size=5)
+    segments, info = model.transcribe(wav_io, beam_size=1)
 
     transcript = " ".join([segment.text for segment in segments])
     logger.info(f"Transcription took {time.time() - t0:.3f}s")
