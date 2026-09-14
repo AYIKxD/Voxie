@@ -10,6 +10,7 @@
 #include <string.h>
 
 #ifdef VOXIE_HAS_TFLITE
+#include "esp_heap_caps.h"
 #include "tensorflow/lite/micro/micro_allocator.h"
 #include "tensorflow/lite/micro/micro_interpreter.h"
 #include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
@@ -34,7 +35,7 @@ extern const uint8_t model_data_tflite_end[] asm("_binary_model_data_tflite_end"
 // --- Wake-word (streaming) model ---
 constexpr int kTensorArenaSize = 64 * 1024;
 constexpr int kMaxResourceVariables = 8;
-static uint8_t tensor_arena[kTensorArenaSize];
+static uint8_t* tensor_arena = nullptr;  // allocated from PSRAM at init
 static const tflite::Model* model = nullptr;
 static tflite::MicroAllocator* allocator = nullptr;
 static tflite::MicroResourceVariables* resource_variables = nullptr;
@@ -44,7 +45,7 @@ static TfLiteTensor* output_tensor = nullptr;
 
 // --- Audio preprocessor (feature extraction) model ---
 constexpr int kPreprocArenaSize = 16 * 1024;
-static uint8_t preproc_arena[kPreprocArenaSize];
+static uint8_t* preproc_arena = nullptr;  // allocated from PSRAM at init
 static tflite::MicroInterpreter* preproc_interpreter = nullptr;
 static TfLiteTensor* preproc_input = nullptr;
 static TfLiteTensor* preproc_output = nullptr;
@@ -230,6 +231,24 @@ extern "C" void kws_engine_init(void) {
 
 #ifdef VOXIE_HAS_TFLITE
     tflite::InitializeTarget();
+
+    // Tensor arenas live in PSRAM to preserve internal RAM for Wi-Fi/DMA.
+    tensor_arena = (uint8_t*)heap_caps_aligned_alloc(
+        16, kTensorArenaSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (tensor_arena == nullptr) {
+        tensor_arena = (uint8_t*)heap_caps_aligned_alloc(
+            16, kTensorArenaSize, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    preproc_arena = (uint8_t*)heap_caps_aligned_alloc(
+        16, kPreprocArenaSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (preproc_arena == nullptr) {
+        preproc_arena = (uint8_t*)heap_caps_aligned_alloc(
+            16, kPreprocArenaSize, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    if (tensor_arena == nullptr || preproc_arena == nullptr) {
+        ESP_LOGE(TAG, "Failed to allocate tensor arenas");
+        return;
+    }
 
     // --- Feature extractor interpreter ---
     const tflite::Model* preproc_model = tflite::GetModel(g_audio_preprocessor_int8_tflite);

@@ -96,8 +96,8 @@
 #define KWS_FEATURE_SIZE         40
 #define KWS_STREAMING_SLICES     3    // microWakeWord streaming input window
 #define KWS_AVG_WINDOW           5    // moving-average window over frame probabilities
-#define KWS_DETECTION_THRESHOLD  0.50f
-#define KWS_SMOOTHING_WINDOW     3    // consecutive averaged frames above threshold to trigger
+#define KWS_DETECTION_THRESHOLD  0.75f
+#define KWS_SMOOTHING_WINDOW     4    // consecutive averaged frames above threshold to trigger
 
 // --- Network ---
 #define WS_RECONNECT_INTERVAL_MS 5000
@@ -105,13 +105,13 @@
 #define SOFTAP_SSID_PREFIX       "Voxie"
 
 // --- Task stack sizes ---
-#define STACK_I2S_MIC            4096
+#define STACK_I2S_MIC            8192
 #define STACK_FEATURE            4096
 #define STACK_KWS                8192
-#define STACK_OPUS_ENCODE        8192
+#define STACK_OPUS_ENCODE        32768  // Opus SILK encoder needs ample stack
 #define STACK_STREAM             8192
-#define STACK_OPUS_DECODE        8192
-#define STACK_PLAYBACK           4096
+#define STACK_OPUS_DECODE        32768  // Opus decoder needs ample stack
+#define STACK_PLAYBACK           8192
 #define STACK_MCP                8192
 #define STACK_DISPLAY            8192
 #define STACK_LED                2048

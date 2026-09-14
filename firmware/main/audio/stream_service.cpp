@@ -5,6 +5,7 @@
 #include "protocol/websocket_protocol.h"
 #include "protocol/binary_protocol.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -193,7 +194,13 @@ static void decode_task(void *arg) {
 // ---------------------------------------------------------------------------
 
 void stream_service_init(void) {
-    s_monitor = xRingbufferCreate(MONITOR_RINGBUF_SIZE, RINGBUF_TYPE_BYTEBUF);
+    // Prefer PSRAM for the monitor buffer to preserve internal RAM.
+    s_monitor = xRingbufferCreateWithCaps(
+        MONITOR_RINGBUF_SIZE, RINGBUF_TYPE_BYTEBUF,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (s_monitor == NULL) {
+        s_monitor = xRingbufferCreate(MONITOR_RINGBUF_SIZE, RINGBUF_TYPE_BYTEBUF);
+    }
 
     int err = OPUS_OK;
     s_enc = opus_encoder_create(MIC_SAMPLE_RATE, 1, OPUS_APPLICATION_VOIP, &err);
