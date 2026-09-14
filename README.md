@@ -2,22 +2,22 @@
 
 > **SIH (Smart India Hackathon) Project** — Custom wake-word recognition on ESP32-S3 with cloud-backed conversational AI and MCP-powered IoT control.
 
-## ✨ Key Features
+##  Key Features
 
 | Feature | Description |
 |---------|-------------|
-| 🎤 **Custom Wake Word** | Open-source KWS trained on your own data (microWakeWord + TFLite Micro) |
-| 🔌 **MCP Server on MCU** | LLM dynamically discovers & calls device tools via JSON-RPC 2.0 |
-| 🗣️ **Barge-in** | Interrupt the assistant mid-sentence with a new command |
-| 🏠 **IoT Control** | Natural language control of lamps, sensors, LED strips |
-| 📺 **LVGL Display** | Chat bubbles, dark/light themes, status bar on ST7789 LCD |
-| 💡 **LED Animations** | State-driven WS2812B effects (breathe, chase, rainbow) |
-| 🌐 **Wi-Fi Provisioning** | Phone-friendly captive portal, no hardcoded credentials |
-| 🔄 **OTA Updates** | Dual-partition firmware updates with automatic rollback |
-| 🔔 **Async Notifications** | Cloud pushes spoken alerts to idle devices |
-| ⚡ **Sub-500ms Latency** | SNTP-synced end-to-end latency measurement |
+|  **Custom Wake Word** | Open-source KWS trained on your own data (microWakeWord + TFLite Micro) |
+|  **MCP Server on MCU** | LLM dynamically discovers & calls device tools via JSON-RPC 2.0 |
+|  **Barge-in** | Interrupt the assistant mid-sentence with a new command |
+|  **IoT Control** | Natural language control of lamps, sensors, LED strips |
+|  **LVGL Display** | Chat bubbles, dark/light themes, status bar on ST7789 LCD |
+|  **LED Animations** | State-driven WS2812B effects (breathe, chase, rainbow) |
+|  **Wi-Fi Provisioning** | Phone-friendly captive portal, no hardcoded credentials |
+|  **OTA Updates** | Dual-partition firmware updates with automatic rollback |
+|  **Async Notifications** | Cloud pushes spoken alerts to idle devices |
+|  **Sub-500ms Latency** | SNTP-synced end-to-end latency measurement |
 
-## 🏗️ Architecture
+##  Architecture
 
 ```
 ┌──────────────────── ESP32-S3 Device ────────────────────┐
@@ -33,7 +33,7 @@
 └─────────────────────────────────────────────────────────┘
 ```
 
-## 📂 Project Structure
+##  Project Structure
 
 ```
 Voxie/
@@ -70,7 +70,7 @@ Voxie/
 └── build.md                # Complete build plan & specification
 ```
 
-## 🚀 Quick Start
+##  Quick Start
 
 ### Prerequisites
 - ESP-IDF v5.x installed ([guide](https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/get-started/))
@@ -101,7 +101,7 @@ python train.py --data-dir data_augmented/
 python export_tflite.py --model-dir output/ --output ../firmware/main/kws/model_data.tflite
 ```
 
-## 📋 Hardware Requirements
+##  Hardware Requirements
 
 | Component | Required | Purpose |
 |-----------|----------|---------|
@@ -114,13 +114,13 @@ python export_tflite.py --model-dir output/ --output ../firmware/main/kws/model_
 | Relay Module | Optional | Lamp control demo |
 | DHT22 Sensor | Optional | Temperature/humidity demo |
 
-## 🎯 SIH Differentiators
+##  SIH Differentiators
 
 1. **Open-source everything** — no proprietary wake-word engine (unlike ESP-SR/WakeNet)
 2. **Custom-trained KWS** — judges can verify the entire training pipeline
 3. **MCP on microcontroller** — first-of-its-kind embedded MCP server
 4. **Measurable latency** — SNTP-synced timestamps prove sub-500ms wake-to-action
 
-## 📄 License
+##  License
 
 MIT
