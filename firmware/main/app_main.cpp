@@ -134,6 +134,11 @@ static void on_ws_text_message(const char *json_str, size_t len) {
         // Server hello response — connection established
         ESP_LOGI(TAG, "Server hello received, session established");
     }
+    else if (strstr(type_pos, "\"wake\"")) {
+        // Remote debug/test trigger: behave as if a wake word fired.
+        ESP_LOGI(TAG, "Remote wake trigger received");
+        xEventGroupSetBits(state_machine_get_events(), EVT_WAKE_WORD_DETECTED);
+    }
 }
 
 /// Handle incoming binary messages (Opus TTS audio from cloud)

@@ -28,14 +28,45 @@ BINARY_TYPE_TTS = 1
 MAX_TOOL_ROUNDS = 3
 
 
+# Currently connected device socket (single-device server), used by /debug/*.
+active_ws: WebSocket | None = None
+
+
 def pack_audio_frame(payload: bytes, frame_type: int) -> bytes:
     ts = int(time.time() * 1000) & 0xFFFFFFFF
     return BINARY_HEADER.pack(1, frame_type, ts, len(payload)) + payload
 
 
+@app.get("/debug/wake")
+async def debug_wake():
+    """Trigger a wake event on the device (test hook)."""
+    if active_ws is None:
+        return {"status": "no device connected"}
+    await active_ws.send_text(json.dumps({"type": "wake"}))
+    return {"status": "sent"}
+
+
+@app.get("/debug/tts")
+async def debug_tts(text: str = "Hello, I am Voxie."):
+    """Synthesize `text` and send it to the device (speaker test hook)."""
+    if active_ws is None:
+        return {"status": "no device connected"}
+    enc = OpusStreamEncoder()
+    pcm = synthesize(text)
+    await active_ws.send_text(json.dumps(
+        {"type": "tts", "state": "start", "text": text}))
+    if pcm:
+        for packet in enc.encode_pcm(pcm):
+            await active_ws.send_bytes(pack_audio_frame(packet, BINARY_TYPE_TTS))
+    await active_ws.send_text(json.dumps({"type": "tts", "state": "end"}))
+    return {"status": "sent", "pcm_bytes": len(pcm)}
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    global active_ws
     await websocket.accept()
+    active_ws = websocket
     logger.info(f"Client connected: {websocket.client}")
 
     mcp_client = McpClient()
@@ -112,6 +143,8 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.exception(f"Error in websocket loop: {e}")
     finally:
         recv_task.cancel()
+        if active_ws is websocket:
+            active_ws = None
 
 
 async def _process_utterance(websocket, mcp_client, encoder, history, pcm):
