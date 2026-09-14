@@ -6,6 +6,7 @@
  */
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 #include <sys/time.h>
 #include "esp_log.h"
 #include "nvs_flash.h"
@@ -264,6 +265,21 @@ extern "C" void app_main(void) {
 
     // --- 5b. Initialize the Opus streaming service (pre-roll + codec) ---
     stream_service_init();
+
+    // Startup test tone (400 ms, 660 Hz) to verify the speaker/I2S path.
+    {
+        const int n = MIC_SAMPLE_RATE * 400 / 1000;
+        int16_t *tone = (int16_t *)malloc(n * sizeof(int16_t));
+        if (tone) {
+            for (int i = 0; i < n; i++) {
+                tone[i] = (int16_t)(9000.0f *
+                    sinf(2.0f * 3.14159265f * 660.0f * i / MIC_SAMPLE_RATE));
+            }
+            audio_service_write_playback(tone, n, 1000);
+            free(tone);
+            ESP_LOGI(TAG, "Startup test tone queued");
+        }
+    }
 
     // --- 6. Initialize KWS engine (feature extraction + inference) ---
     kws_engine_init();
