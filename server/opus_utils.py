@@ -4,10 +4,10 @@ import opuslib
 
 logger = logging.getLogger(__name__)
 
-SAMPLE_RATE = 16000
+SAMPLE_RATE = 24000   # Must match SPK_SAMPLE_RATE in firmware config.h
 CHANNELS = 1
 FRAME_MS = 60
-FRAME_SAMPLES = SAMPLE_RATE * FRAME_MS // 1000  # 960
+FRAME_SAMPLES = SAMPLE_RATE * FRAME_MS // 1000  # 1440
 
 
 class OpusStreamDecoder:

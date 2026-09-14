@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 PIPER_VOICE = os.environ.get("PIPER_VOICE", "en_US-lessac-medium")
 # Piper medium voices are 22050 Hz; the device expects 16 kHz mono.
 PIPER_RATE = int(os.environ.get("PIPER_RATE", "22050"))
-TARGET_RATE = 16000
+TARGET_RATE = 24000  # Must match SPK_SAMPLE_RATE in firmware config.h
 
 # Persistent Piper process for lower latency (avoids respawning per sentence).
 _piper_proc = None
