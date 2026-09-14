@@ -199,6 +199,32 @@ static void main_event_task(void *arg) {
 }
 
 // ============================================================================
+// Manual trigger — BOOT button (GPIO0, active low) acts as a wake-word event.
+// Useful for testing the pipeline and as an accessibility/quiet-demo trigger.
+// ============================================================================
+
+static void button_task(void *arg) {
+    gpio_config_t io = {};
+    io.pin_bit_mask = (1ULL << BUTTON_GPIO);
+    io.mode = GPIO_MODE_INPUT;
+    io.pull_up_en = GPIO_PULLUP_ENABLE;
+    io.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    io.intr_type = GPIO_INTR_DISABLE;
+    gpio_config(&io);
+
+    int last = 1;
+    while (1) {
+        int level = gpio_get_level((gpio_num_t)BUTTON_GPIO);
+        if (last == 1 && level == 0) {
+            ESP_LOGI(TAG, "Button pressed -> triggering wake");
+            xEventGroupSetBits(state_machine_get_events(), EVT_WAKE_WORD_DETECTED);
+        }
+        last = level;
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+}
+
+// ============================================================================
 // Entry point
 // ============================================================================
 
@@ -299,8 +325,9 @@ extern "C" void app_main(void) {
         ws_protocol_connect("ws://192.168.1.100:8000/ws");
     }
 
-    // --- 14. Start main event loop task ---
+    // --- 14. Start main event loop + manual trigger tasks ---
     xTaskCreatePinnedToCore(main_event_task, "main_evt", 4096, NULL, 5, NULL, 1);
+    xTaskCreatePinnedToCore(button_task, "button", 3072, NULL, 4, NULL, 1);
 
     ESP_LOGI(TAG, "All subsystems initialized. Voxie is ready!");
 
