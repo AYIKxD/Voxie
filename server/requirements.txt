@@ -10,5 +10,6 @@ google-genai
 python-dotenv
 opuslib
 piper-tts
+edge-tts
 numpy
 soxr
