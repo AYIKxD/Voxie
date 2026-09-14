@@ -126,9 +126,13 @@ async def websocket_endpoint(websocket: WebSocket):
         await websocket.send_text(json.dumps({"type": "hello"}))
         await asyncio.wait_for(hello_received.wait(), timeout=10)
 
+        # Give the device a moment to finish registering all its tools
+        # (IoT tools register after built-in tools on the device side).
+        await asyncio.sleep(0.3)
+
         await mcp_client.initialize(websocket)
-        tools = await mcp_client.list_tools(websocket)
-        logger.info(f"Cached {len(tools)} MCP tools")
+        tools = await mcp_client.list_tools(websocket, retries=3)
+        logger.info(f"Cached {len(tools)} MCP tools from device")
 
         while True:
             pcm = await utterances.get()
@@ -167,6 +171,11 @@ async def _process_utterance(websocket, mcp_client, encoder, history, pcm):
 
         await websocket.send_text(json.dumps({"type": "stt", "text": transcript}))
         history.append({"role": "user", "content": transcript})
+
+        # Lazily re-fetch tools if the cache is empty (e.g. initial fetch
+        # timed out).  This is the safety net that prevents "0 tools" from
+        # persisting for the entire session.
+        await mcp_client.ensure_tools(websocket)
 
         reply_text = ""
         for _round in range(MAX_TOOL_ROUNDS):
