@@ -10,6 +10,10 @@
 #define VOXIE_WAKE_WORD          "Hey Voxie"
 
 // --- Feature Flags (set via menuconfig or sdkconfig.defaults) ---
+#ifndef VOXIE_HAS_AFE
+#define VOXIE_HAS_AFE 1
+#endif
+
 #ifndef VOXIE_ENABLE_MCP
 #define VOXIE_ENABLE_MCP         1
 #endif

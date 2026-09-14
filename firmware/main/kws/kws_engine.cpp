@@ -57,6 +57,29 @@ static TaskHandle_t feature_task_handle = NULL;
 static TaskHandle_t kws_task_handle = NULL;
 static volatile bool kws_running = false;
 
+#if VOXIE_HAS_AFE
+static RingbufHandle_t kws_audio_ringbuf = NULL;
+extern "C" void kws_engine_push_audio(const int16_t* data, size_t samples) {
+    if (kws_audio_ringbuf) {
+        xRingbufferSend(kws_audio_ringbuf, data, samples * sizeof(int16_t), 0);
+    }
+}
+
+static size_t kws_engine_read_audio(int16_t *buf, size_t num_samples, uint32_t timeout_ms) {
+    size_t wanted_bytes = num_samples * sizeof(int16_t);
+    size_t total_read = 0;
+    while (total_read < wanted_bytes) {
+        size_t item_size = 0;
+        void *item = xRingbufferReceiveUpTo(kws_audio_ringbuf, &item_size, pdMS_TO_TICKS(timeout_ms), wanted_bytes - total_read);
+        if (item == NULL) break;
+        memcpy((uint8_t *)buf + total_read, item, item_size);
+        vRingbufferReturnItem(kws_audio_ringbuf, item);
+        total_read += item_size;
+    }
+    return total_read / sizeof(int16_t);
+}
+#endif
+
 // ---------------------------------------------------------------------------
 // Feature task (Core 0): 10 ms mic chunks -> 30 ms window -> 40 int8 features
 // ---------------------------------------------------------------------------
@@ -74,12 +97,19 @@ static void feature_task(void* arg) {
     ESP_LOGI(TAG, "Feature task started");
 
     while (kws_running) {
+#if VOXIE_HAS_AFE
+        size_t samples_read = kws_engine_read_audio(chunk, samples_per_frame, 100);
+        if (samples_read == 0) {
+            continue;
+        }
+#else
         size_t samples_read = audio_service_read_mic(chunk, samples_per_frame, 100);
         if (samples_read == 0) {
             continue;
         }
         // Feed the streaming/pre-roll pipeline (non-blocking).
         stream_service_push_mic(chunk, samples_read);
+#endif
         if (samples_read != samples_per_frame) {
             continue;
         }
@@ -233,6 +263,14 @@ extern "C" void kws_engine_init(void) {
         ESP_LOGE(TAG, "Failed to create feature queue");
         return;
     }
+
+#if VOXIE_HAS_AFE
+    kws_audio_ringbuf = xRingbufferCreate(8192, RINGBUF_TYPE_BYTEBUF);
+    if (!kws_audio_ringbuf) {
+        ESP_LOGE(TAG, "Failed to create kws audio ringbuf");
+        return;
+    }
+#endif
 
 #ifdef VOXIE_HAS_TFLITE
     tflite::InitializeTarget();

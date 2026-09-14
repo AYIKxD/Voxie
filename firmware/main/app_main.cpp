@@ -20,6 +20,9 @@
 #include "system/ota_manager.h"
 #include "audio/audio_service.h"
 #include "audio/stream_service.h"
+#if VOXIE_HAS_AFE
+#include "audio/afe_service.h"
+#endif
 #include "kws/kws_engine.h"
 #include "protocol/websocket_protocol.h"
 #include "display/display_manager.h"
@@ -283,6 +286,11 @@ extern "C" void app_main(void) {
             ESP_LOGI(TAG, "Startup test tone queued");
         }
     }
+
+#if VOXIE_HAS_AFE
+    afe_service_init();
+    afe_service_start();
+#endif
 
     // --- 6. Initialize KWS engine (feature extraction + inference) ---
     kws_engine_init();

@@ -18,3 +18,4 @@ dependencies:
   # Opus codec (encode mic audio, decode TTS audio) with ESP32 optimizations.
   esphome/micro-opus: ^0.4.1
   espressif/led_strip: '*'
+  espressif/esp-sr: '==2.4.7'
