@@ -53,10 +53,12 @@
 
 // --- I2S Speaker (TX) - I2S_NUM_1 ---
 // MAX98357A: WS/LRC, SCK/BCLK, SD/DIN (match the actual wiring).
+// Run speaker at 24kHz to match neural TTS output — FM-radio quality vs 16kHz telephone quality.
 #define SPK_I2S_NUM              I2S_NUM_1
 #define SPK_I2S_WS               GPIO_NUM_7    // MAX98357A LRC
 #define SPK_I2S_SCK              GPIO_NUM_15   // MAX98357A BCLK
 #define SPK_I2S_SD               GPIO_NUM_16   // MAX98357A DIN
+#define SPK_SAMPLE_RATE          24000
 
 // --- SPI LCD (ST7789) ---
 #define LCD_SPI_HOST             SPI2_HOST

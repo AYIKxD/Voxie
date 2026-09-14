@@ -21,10 +21,11 @@ static const char *TAG = "stream_svc";
 #define MONITOR_RINGBUF_SIZE  (MIC_SAMPLE_RATE * 2)          // 1 s of 16-bit mono
 #define PRE_ROLL_MS           800
 #define PRE_ROLL_SAMPLES      (MIC_SAMPLE_RATE * PRE_ROLL_MS / 1000)
-#define OPUS_FRAME_SAMPLES    (MIC_SAMPLE_RATE * OPUS_FRAME_DURATION_MS / 1000)  // 960
-#define MAX_TTS_FRAME_SAMPLES (OPUS_FRAME_SAMPLES * 6)
+#define OPUS_FRAME_SAMPLES    (MIC_SAMPLE_RATE * OPUS_FRAME_DURATION_MS / 1000)  // 960 @ 16kHz mic
+#define TTS_FRAME_SAMPLES     (SPK_SAMPLE_RATE * OPUS_FRAME_DURATION_MS / 1000)  // 1440 @ 24kHz spk
+#define MAX_TTS_FRAME_SAMPLES (TTS_FRAME_SAMPLES * 2)
 #define VAD_RMS_THRESHOLD     600.0f
-#define VAD_SILENCE_END_MS    1000
+#define VAD_SILENCE_END_MS    500
 #define MAX_STREAM_MS         12000
 
 typedef struct {
@@ -212,7 +213,7 @@ void stream_service_init(void) {
         opus_encoder_ctl(s_enc, OPUS_SET_COMPLEXITY(OPUS_COMPLEXITY));
     }
 
-    s_dec = opus_decoder_create(MIC_SAMPLE_RATE, 1, &err);
+    s_dec = opus_decoder_create(SPK_SAMPLE_RATE, 1, &err);
     if (err != OPUS_OK || s_dec == NULL) {
         ESP_LOGE(TAG, "opus_decoder_create failed: %d", err);
         s_dec = NULL;

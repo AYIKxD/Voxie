@@ -55,9 +55,6 @@ static void init_i2s_mic(void) {
         },
     };
     std_cfg.slot_cfg.slot_mask = I2S_STD_SLOT_LEFT;
-    std_cfg.slot_cfg.ws_width  = I2S_SLOT_BIT_WIDTH_16BIT;
-    std_cfg.slot_cfg.ws_pol    = false;
-    std_cfg.slot_cfg.bit_shift = true;
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(s_mic_chan, &std_cfg));
     ESP_ERROR_CHECK(i2s_channel_enable(s_mic_chan));
     ESP_LOGI(TAG, "I2S mic initialized (I2S%d, %d Hz, 32-bit slots)", MIC_I2S_NUM, MIC_SAMPLE_RATE);
@@ -69,10 +66,11 @@ static void init_i2s_speaker(void) {
     chan_cfg.dma_frame_num = DMA_BUF_LEN_SAMPLES;
     ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &s_spk_chan, NULL));
 
-    // MAX98357A expects a standard stereo I2S frame (L+R, 32 BCLK per LRCK).
+    // MAX98357A: 24kHz 32-bit mono. Running at 24kHz gives FM-radio quality TTS
+    // (max freq 12kHz) vs 16kHz telephone quality (max freq 8kHz).
     i2s_std_config_t std_cfg = {
-        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(MIC_SAMPLE_RATE),
-        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
+        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(SPK_SAMPLE_RATE),
+        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_MONO),
         .gpio_cfg = {
             .mclk = I2S_GPIO_UNUSED,
             .bclk = SPK_I2S_SCK,
@@ -86,6 +84,7 @@ static void init_i2s_speaker(void) {
             },
         },
     };
+    std_cfg.slot_cfg.slot_mask = I2S_STD_SLOT_LEFT;
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(s_spk_chan, &std_cfg));
     ESP_ERROR_CHECK(i2s_channel_enable(s_spk_chan));
     ESP_LOGI(TAG, "I2S speaker initialized (I2S%d)", SPK_I2S_NUM);
@@ -124,41 +123,46 @@ static void i2s_mic_task(void *arg) {
 /// Playback task — pulls PCM from the playback ring buffer and writes to I2S speaker.
 static void playback_task(void *arg) {
     // Static buffers: these are too large to keep on the task stack.
-    static int16_t dma_buf[DMA_BUF_LEN_SAMPLES];
-    static int16_t stereo_buf[DMA_BUF_LEN_SAMPLES * 2];
+    static int32_t dma_buf32[DMA_BUF_LEN_SAMPLES];
     size_t bytes_written = 0;
 
     ESP_LOGI(TAG, "Playback task started on core %d", xPortGetCoreID());
 
     while (1) {
         size_t item_size = 0;
+        // Don't wait long. If we don't have data, we must feed silence to I2S DMA.
         void *item = xRingbufferReceiveUpTo(s_playback_ringbuf, &item_size,
-                                             pdMS_TO_TICKS(50), DMA_BUF_LEN_BYTES);
+                                             pdMS_TO_TICKS(10), DMA_BUF_LEN_BYTES);
         size_t num_samples = 0;
 
         if (item != NULL && item_size > 0) {
-            // Apply software volume scaling
             int16_t *samples = (int16_t *)item;
             num_samples = item_size / sizeof(int16_t);
-            float gain = (float)s_volume / 100.0f;
+            
+            // Exponential volume curve scaled to 32-bit to prevent quantization noise
+            double vol_normalized = (double)s_volume / 100.0;
+            int32_t volume_factor = (int32_t)(vol_normalized * vol_normalized * 65536.0);
+
             for (size_t i = 0; i < num_samples; i++) {
-                dma_buf[i] = (int16_t)((float)samples[i] * gain);
+                int64_t temp = (int64_t)samples[i] * volume_factor;
+                if (temp > INT32_MAX) {
+                    dma_buf32[i] = INT32_MAX;
+                } else if (temp < INT32_MIN) {
+                    dma_buf32[i] = INT32_MIN;
+                } else {
+                    dma_buf32[i] = (int32_t)temp;
+                }
             }
             vRingbufferReturnItem(s_playback_ringbuf, item);
         } else {
             // No audio to play — emit silence to keep DMA/amp running cleanly
-            memset(dma_buf, 0, sizeof(dma_buf));
+            memset(dma_buf32, 0, sizeof(dma_buf32));
             num_samples = DMA_BUF_LEN_SAMPLES;
         }
 
-        // Duplicate mono samples into L/R for the MAX98357A stereo frame.
-        for (size_t i = 0; i < num_samples; i++) {
-            stereo_buf[2 * i]     = dma_buf[i];
-            stereo_buf[2 * i + 1] = dma_buf[i];
-        }
-        i2s_channel_write(s_spk_chan, stereo_buf,
-                          num_samples * 2 * sizeof(int16_t),
-                          &bytes_written, pdMS_TO_TICKS(100));
+        i2s_channel_write(s_spk_chan, dma_buf32,
+                          num_samples * sizeof(int32_t),
+                          &bytes_written, portMAX_DELAY);
     }
 }
 
