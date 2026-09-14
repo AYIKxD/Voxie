@@ -35,15 +35,25 @@ class OpusStreamDecoder:
 
 
 class OpusStreamEncoder:
-    """Stateful Opus encoder for TTS output."""
+    """Stateful Opus encoder for TTS output.
+
+    Uses AUDIO application mode (not VOIP) and a higher bitrate for clean
+    TTS playback.  VOIP mode applies aggressive speech processing (noise
+    suppression, comfort noise, FEC) that interacts badly with synthetic
+    speech — the codec thinks the clean TTS signal has "noise" and tries to
+    remove it, producing buzzing/artifacts.
+
+    AUDIO mode preserves the waveform more faithfully, which is exactly
+    what we want for pre-synthesized TTS audio going to the speaker.
+    """
 
     def __init__(self, sample_rate: int = SAMPLE_RATE, channels: int = CHANNELS,
-                 bitrate: int = 16000):
+                 bitrate: int = 32000):
         self.sample_rate = sample_rate
         self.channels = channels
         self.frame_samples = sample_rate * FRAME_MS // 1000
         self.frame_bytes = self.frame_samples * 2
-        self.encoder = opuslib.Encoder(sample_rate, channels, opuslib.APPLICATION_VOIP)
+        self.encoder = opuslib.Encoder(sample_rate, channels, opuslib.APPLICATION_AUDIO)
         self.encoder.bitrate = bitrate
 
     def encode_pcm(self, pcm: bytes):

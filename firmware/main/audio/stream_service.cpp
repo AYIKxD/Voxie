@@ -218,7 +218,7 @@ void stream_service_init(void) {
         s_dec = NULL;
     }
 
-    s_tts_queue = xQueueCreate(16, sizeof(tts_item_t *));
+    s_tts_queue = xQueueCreate(48, sizeof(tts_item_t *));
 
     xTaskCreatePinnedToCore(stream_task, "opus_enc", STACK_OPUS_ENCODE, NULL, 6,
                             &s_stream_task, 1);
