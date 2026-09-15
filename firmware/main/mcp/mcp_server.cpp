@@ -3,10 +3,12 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_app_desc.h"
+#include <cJSON.h>
 #include <vector>
 #include <string>
 #include <cstring>
 #include <cstdio>
+#include <memory>
 
 static const char *TAG = "mcp_srv";
 
@@ -14,62 +16,59 @@ static const char *TAG = "mcp_srv";
 static std::vector<McpTool> s_tools;
 
 // ============================================================================
-// JSON helpers (minimal, no external JSON library dependency)
+// cJSON helpers (xiaozhi-style: build responses with cJSON, own the memory)
 // ============================================================================
 
-/// Extract a string value for a given key from a JSON object string.
-/// Very basic parser — sufficient for the flat MCP messages we handle.
-static std::string json_get_string(const std::string &json, const char *key) {
-    char search[128];
-    snprintf(search, sizeof(search), "\"%s\":", key);
-    size_t pos = json.find(search);
-    if (pos == std::string::npos) return "";
-
-    pos = json.find('"', pos + strlen(search));
-    if (pos == std::string::npos) return "";
-    pos++; // skip opening quote
-
-    size_t end = json.find('"', pos);
-    if (end == std::string::npos) return "";
-
-    return json.substr(pos, end - pos);
-}
-
-/// Extract an integer value for a given key
-static int json_get_int(const std::string &json, const char *key) {
-    char search[128];
-    snprintf(search, sizeof(search), "\"%s\":", key);
-    size_t pos = json.find(search);
-    if (pos == std::string::npos) return -1;
-
-    pos += strlen(search);
-    // Skip whitespace
-    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t')) pos++;
-    return atoi(json.c_str() + pos);
-}
-
-/// Extract the "arguments" or "params" sub-object as a raw JSON string
-static std::string json_get_object(const std::string &json, const char *key) {
-    char search[128];
-    snprintf(search, sizeof(search), "\"%s\":", key);
-    size_t pos = json.find(search);
-    if (pos == std::string::npos) return "{}";
-
-    pos += strlen(search);
-    while (pos < json.size() && json[pos] != '{') pos++;
-    if (pos >= json.size()) return "{}";
-
-    // Find matching closing brace
-    int depth = 0;
-    size_t start = pos;
-    for (; pos < json.size(); pos++) {
-        if (json[pos] == '{') depth++;
-        else if (json[pos] == '}') {
-            depth--;
-            if (depth == 0) return json.substr(start, pos - start + 1);
-        }
+struct CJsonDeleter {
+    void operator()(cJSON *value) const {
+        if (value != nullptr) cJSON_Delete(value);
     }
-    return "{}";
+};
+using CJsonPtr = std::unique_ptr<cJSON, CJsonDeleter>;
+
+/// Extract a string value for a given key from a JSON object.
+static std::string json_get_string(cJSON *obj, const char *key) {
+    const char *value = cJSON_GetStringValue(cJSON_GetObjectItem(obj, key));
+    return value != nullptr ? value : "";
+}
+
+/// Extract an integer value for a given key.
+static int json_get_int(cJSON *obj, const char *key) {
+    cJSON *item = cJSON_GetObjectItem(obj, key);
+    if (cJSON_IsNumber(item)) return item->valueint;
+    return -1;
+}
+
+/// Serialize a cJSON tree to a std::string (formatted like json.dumps:
+/// compact, no spaces, so server-side parsers behave identically).
+static std::string json_print(cJSON *root) {
+    char *text = cJSON_PrintUnformatted(root);
+    if (text == nullptr) return "{}";
+    std::string result(text);
+    cJSON_free(text);
+    return result;
+}
+
+/// Build the standard MCP response envelope:
+/// {"type":"mcp","id":N,"result":{...}} or with "error":{...}
+static std::string make_response(int id, CJsonPtr &&result) {
+    CJsonPtr root(cJSON_CreateObject());
+    cJSON_AddStringToObject(root.get(), "type", "mcp");
+    cJSON_AddNumberToObject(root.get(), "id", id);
+    if (result) {
+        cJSON_AddItemToObject(root.get(), "result", result.release());
+    }
+    return json_print(root.get());
+}
+
+static std::string make_error(int id, int code, const std::string &message) {
+    CJsonPtr root(cJSON_CreateObject());
+    cJSON_AddStringToObject(root.get(), "type", "mcp");
+    cJSON_AddNumberToObject(root.get(), "id", id);
+    cJSON *err = cJSON_AddObjectToObject(root.get(), "error");
+    cJSON_AddNumberToObject(err, "code", code);
+    cJSON_AddStringToObject(err, "message", message.c_str());
+    return json_print(root.get());
 }
 
 // ============================================================================
@@ -78,82 +77,93 @@ static std::string json_get_object(const std::string &json, const char *key) {
 
 static std::string handle_initialize(int id) {
     const esp_app_desc_t *app_desc = esp_app_get_description();
-    char buf[512];
-    snprintf(buf, sizeof(buf),
-        "{\"type\":\"mcp\",\"id\":%d,\"result\":{"
-        "\"protocolVersion\":\"2024-11-05\","
-        "\"capabilities\":{\"tools\":{}},"
-        "\"serverInfo\":{\"name\":\"Voxie\",\"version\":\"%s\"}"
-        "}}",
-        id, app_desc->version);
-    return std::string(buf);
+
+    CJsonPtr result(cJSON_CreateObject());
+    cJSON_AddStringToObject(result.get(), "protocolVersion", "2024-11-05");
+    cJSON *caps = cJSON_AddObjectToObject(result.get(), "capabilities");
+    cJSON_AddObjectToObject(caps, "tools");
+    cJSON *info = cJSON_AddObjectToObject(result.get(), "serverInfo");
+    cJSON_AddStringToObject(info, "name", "Voxie");
+    cJSON_AddStringToObject(info, "version", app_desc->version);
+
+    return make_response(id, std::move(result));
 }
 
-static std::string handle_tools_list(int id, const std::string &request) {
+static std::string handle_tools_list(int id, cJSON *request) {
     // Support pagination via cursor
-    std::string cursor_str = json_get_string(request, "cursor");
-    int cursor = cursor_str.empty() ? 0 : atoi(cursor_str.c_str());
+    int cursor = 0;
+    const char *cursor_str = json_get_string(request, "cursor").c_str();
+    if (cursor_str[0] != '\0') cursor = atoi(cursor_str);
     const int page_size = 10;
 
-    std::string tools_json = "[";
+    CJsonPtr result(cJSON_CreateObject());
+    cJSON *tools = cJSON_AddArrayToObject(result.get(), "tools");
+
     int count = 0;
     for (int i = cursor; i < (int)s_tools.size() && count < page_size; i++, count++) {
-        if (count > 0) tools_json += ",";
-        tools_json += "{";
-        tools_json += "\"name\":\"" + s_tools[i].name + "\",";
-        tools_json += "\"description\":\"" + s_tools[i].description + "\",";
-        tools_json += "\"inputSchema\":" + s_tools[i].input_schema;
-        tools_json += "}";
+        cJSON *tool = cJSON_CreateObject();
+        cJSON_AddStringToObject(tool, "name", s_tools[i].name.c_str());
+        cJSON_AddStringToObject(tool, "description", s_tools[i].description.c_str());
+        cJSON *schema = cJSON_Parse(s_tools[i].input_schema.c_str());
+        if (schema == nullptr) {
+            schema = cJSON_CreateObject();
+        }
+        cJSON_AddItemToObject(tool, "inputSchema", schema);
+        cJSON_AddItemToArray(tools, tool);
     }
-    tools_json += "]";
 
-    std::string result = "{\"type\":\"mcp\",\"id\":" + std::to_string(id) + ",\"result\":{\"tools\":" + tools_json;
-
-    // Add nextCursor if there are more tools
     int next = cursor + count;
     if (next < (int)s_tools.size()) {
-        result += ",\"nextCursor\":\"" + std::to_string(next) + "\"";
+        char next_buf[24];
+        snprintf(next_buf, sizeof(next_buf), "%d", next);
+        cJSON_AddStringToObject(result.get(), "nextCursor", next_buf);
     }
-    result += "}}";
 
-    return result;
+    return make_response(id, std::move(result));
 }
 
-static std::string handle_tools_call(int id, const std::string &request) {
-    // Extract tool name from params
-    std::string params = json_get_object(request, "params");
+static std::string handle_tools_call(int id, cJSON *request) {
+    cJSON *params = cJSON_GetObjectItem(request, "params");
+    if (params == nullptr) params = cJSON_GetObjectItem(request, "arguments");
+    if (params == nullptr) {
+        return make_error(id, -32602, "Missing params");
+    }
+
     std::string tool_name = json_get_string(params, "name");
-    std::string arguments = json_get_object(params, "arguments");
+
+    cJSON *args = cJSON_GetObjectItem(params, "arguments");
+    char *args_text = args != nullptr ? cJSON_PrintUnformatted(args) : nullptr;
+    std::string arguments = args_text != nullptr ? args_text : "{}";
+    if (args_text != nullptr) cJSON_free(args_text);
 
     ESP_LOGI(TAG, "Tool call: %s args=%s", tool_name.c_str(), arguments.c_str());
 
-    // Find the tool
     for (const auto &tool : s_tools) {
         if (tool.name == tool_name) {
             McpResult result = tool.callback(arguments);
 
-            char buf[1024];
-            snprintf(buf, sizeof(buf),
-                "{\"type\":\"mcp\",\"id\":%d,\"result\":{"
-                "\"content\":[{\"type\":\"text\",\"text\":\"%s\"}],"
-                "\"isError\":%s"
-                "}}",
-                id,
-                result.content.c_str(),
-                result.is_error ? "true" : "false");
-            return std::string(buf);
+            CJsonPtr out(cJSON_CreateObject());
+            cJSON *content = cJSON_AddArrayToObject(out.get(), "content");
+            cJSON *item = cJSON_CreateObject();
+            cJSON_AddStringToObject(item, "type", "text");
+            cJSON_AddStringToObject(item, "text", result.content.c_str());
+            cJSON_AddItemToArray(content, item);
+            cJSON_AddBoolToObject(out.get(), "isError", result.is_error);
+
+            return make_response(id, std::move(out));
         }
     }
 
-    // Tool not found
-    char buf[256];
-    snprintf(buf, sizeof(buf),
-        "{\"type\":\"mcp\",\"id\":%d,\"result\":{"
-        "\"content\":[{\"type\":\"text\",\"text\":\"Tool not found: %s\"}],"
-        "\"isError\":true"
-        "}}",
-        id, tool_name.c_str());
-    return std::string(buf);
+    CJsonPtr out(cJSON_CreateObject());
+    cJSON *content = cJSON_AddArrayToObject(out.get(), "content");
+    cJSON *item = cJSON_CreateObject();
+    cJSON_AddStringToObject(item, "type", "text");
+    std::string msg = "Tool not found: " + tool_name;
+    cJSON_AddStringToObject(item, "text", msg.c_str());
+    cJSON_AddItemToArray(content, item);
+    cJSON_AddBoolToObject(out.get(), "isError", true);
+
+    return make_response(id, std::move(out));
 }
 
 // ============================================================================
@@ -175,8 +185,13 @@ void mcp_server_add_tool(const std::string &name,
 }
 
 std::string mcp_server_handle_request(const std::string &request_json) {
-    int id = json_get_int(request_json, "id");
-    std::string method = json_get_string(request_json, "method");
+    CJsonPtr root(cJSON_Parse(request_json.c_str()));
+    if (root == nullptr) {
+        return make_error(0, -32700, "Parse error");
+    }
+
+    int id = json_get_int(root.get(), "id");
+    std::string method = json_get_string(root.get(), "method");
 
     // The cloud MCP client prefixes methods with "mcp:" (e.g. "mcp:tools/call").
     // Normalize to the bare method name used by the handlers.
@@ -189,17 +204,11 @@ std::string mcp_server_handle_request(const std::string &request_json) {
     if (method == "initialize") {
         return handle_initialize(id);
     } else if (method == "tools/list") {
-        return handle_tools_list(id, request_json);
+        return handle_tools_list(id, root.get());
     } else if (method == "tools/call") {
-        return handle_tools_call(id, request_json);
-    } else {
-        char buf[256];
-        snprintf(buf, sizeof(buf),
-            "{\"type\":\"mcp\",\"id\":%d,\"error\":{"
-            "\"code\":-32601,\"message\":\"Method not found: %s\"}}",
-            id, method.c_str());
-        return std::string(buf);
+        return handle_tools_call(id, root.get());
     }
+    return make_error(id, -32601, "Method not found: " + method);
 }
 
 size_t mcp_server_tool_count(void) {
@@ -207,15 +216,17 @@ size_t mcp_server_tool_count(void) {
 }
 
 std::string mcp_server_get_tools_json(void) {
-    std::string json = "[";
-    for (size_t i = 0; i < s_tools.size(); i++) {
-        if (i > 0) json += ",";
-        json += "{";
-        json += "\"name\":\"" + s_tools[i].name + "\",";
-        json += "\"description\":\"" + s_tools[i].description + "\",";
-        json += "\"inputSchema\":" + s_tools[i].input_schema;
-        json += "}";
+    CJsonPtr arr(cJSON_CreateArray());
+    for (const auto &t : s_tools) {
+        cJSON *item = cJSON_CreateObject();
+        cJSON_AddStringToObject(item, "name", t.name.c_str());
+        cJSON_AddStringToObject(item, "description", t.description.c_str());
+        cJSON *schema = cJSON_Parse(t.input_schema.c_str());
+        if (schema == nullptr) {
+            schema = cJSON_CreateObject();
+        }
+        cJSON_AddItemToObject(item, "inputSchema", schema);
+        cJSON_AddItemToArray(arr.get(), item);
     }
-    json += "]";
-    return json;
+    return json_print(arr.get());
 }
