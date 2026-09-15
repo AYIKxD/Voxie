@@ -11,6 +11,7 @@
 #include <sys/time.h>
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "esp_event.h"
@@ -160,6 +161,8 @@ static void on_ws_binary_message(const uint8_t *data, size_t len) {
 
 static void main_event_task(void *arg) {
     EventGroupHandle_t events = state_machine_get_events();
+    device_state_t last_state = state_machine_get_state();
+    int64_t state_since_us = esp_timer_get_time();
 
     while (1) {
         EventBits_t bits = xEventGroupWaitBits(events,
@@ -233,6 +236,27 @@ static void main_event_task(void *arg) {
                 display_manager_set_state(DEVICE_STATE_IDLE_LISTENING);
                 led_strip_set_state(DEVICE_STATE_IDLE_LISTENING);
             }
+        }
+
+        // Stuck-state watchdog: if a turn never completes (server rebuilt
+        // mid-reply leaves a half-open socket the client never notices),
+        // force a reconnect and return to idle instead of hanging forever.
+        device_state_t now_state = state_machine_get_state();
+        if (now_state != last_state) {
+            last_state = now_state;
+            state_since_us = esp_timer_get_time();
+        } else if ((now_state == DEVICE_STATE_STREAMING ||
+                    now_state == DEVICE_STATE_WAITING_REPLY ||
+                    now_state == DEVICE_STATE_PLAYING_REPLY ||
+                    now_state == DEVICE_STATE_NOTIFYING) &&
+                   (esp_timer_get_time() - state_since_us) > 30000000LL) {
+            ESP_LOGW(TAG, "State %s stuck >30s; recovering",
+                     device_state_to_str(now_state));
+            stream_service_flush_tts();
+            audio_service_flush_playback();
+            state_machine_transition(DEVICE_STATE_IDLE_LISTENING);
+            ws_protocol_reconnect();
+            state_since_us = esp_timer_get_time();
         }
 
         // Update display with current state periodically

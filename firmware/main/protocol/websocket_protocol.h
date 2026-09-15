@@ -24,6 +24,9 @@ void ws_protocol_init(void);
 /// Connect to the cloud server. URL comes from wifi_manager or config.
 void ws_protocol_connect(const char *server_url);
 
+/// Force a fresh connection using the last URL (drops a stuck/half-open socket).
+void ws_protocol_reconnect(void);
+
 /// Disconnect from server
 void ws_protocol_disconnect(void);
 

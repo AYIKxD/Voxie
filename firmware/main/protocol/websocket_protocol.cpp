@@ -18,6 +18,7 @@ static ws_binary_cb_t s_binary_cb = NULL;
 static bool s_connected = false;
 static char s_device_id[32] = {0};
 static char s_fw_version[32] = {0};
+static char s_server_url[192] = {0};
 
 // ============================================================================
 // WebSocket event handler
@@ -95,6 +96,7 @@ void ws_protocol_connect(const char *server_url) {
     if (s_ws_client != NULL) {
         ws_protocol_disconnect();
     }
+    strncpy(s_server_url, server_url, sizeof(s_server_url) - 1);
 
     esp_websocket_client_config_t ws_cfg = {};
     ws_cfg.uri = server_url;
@@ -124,6 +126,15 @@ void ws_protocol_connect(const char *server_url) {
     } else {
         ESP_LOGI(TAG, "Connecting to %s", server_url);
     }
+}
+
+void ws_protocol_reconnect(void) {
+    if (s_server_url[0] == '\0') {
+        ESP_LOGW(TAG, "No server URL stored; cannot reconnect");
+        return;
+    }
+    ESP_LOGW(TAG, "Forcing WebSocket reconnect to %s", s_server_url);
+    ws_protocol_connect(s_server_url);
 }
 
 void ws_protocol_disconnect(void) {
