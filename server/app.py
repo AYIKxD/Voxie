@@ -27,14 +27,38 @@ BINARY_TYPE_MIC = 0
 BINARY_TYPE_TTS = 1
 MAX_TOOL_ROUNDS = 3
 
+# Opus TTS frame duration and send pacing. The device buffers a bounded amount
+# of audio, so blasting a whole reply at once overflows it. Send slightly
+# faster than real-time so a small jitter buffer builds on the device.
+OPUS_FRAME_MS = 60
+TTS_PACE_S = (OPUS_FRAME_MS / 1000.0) * 0.8
+
+
+async def stream_tts(ws, encoder: OpusStreamEncoder, pcm: bytes):
+    """Encode PCM and stream it as paced Opus TTS frames."""
+    for packet in encoder.encode_pcm(pcm):
+        await ws.send_bytes(pack_audio_frame(packet, BINARY_TYPE_TTS))
+        await asyncio.sleep(TTS_PACE_S)
+
 
 # Currently connected device socket (single-device server), used by /debug/*.
 active_ws: WebSocket | None = None
+active_mcp: McpClient | None = None
 
 
 def pack_audio_frame(payload: bytes, frame_type: int) -> bytes:
     ts = int(time.time() * 1000) & 0xFFFFFFFF
     return BINARY_HEADER.pack(1, frame_type, ts, len(payload)) + payload
+
+
+@app.get("/debug/volume")
+async def debug_volume(v: int = 40):
+    """Set the device speaker volume via MCP (0-100)."""
+    if active_ws is None or active_mcp is None:
+        return {"status": "no device connected"}
+    result = await active_mcp.call_tool(
+        active_ws, "self.audio_speaker.set_volume", {"volume": v})
+    return {"status": "sent", "volume": v, "result": result}
 
 
 @app.get("/debug/wake")
@@ -56,8 +80,7 @@ async def debug_tts(text: str = "Hello, I am Voxie."):
     await active_ws.send_text(json.dumps(
         {"type": "tts", "state": "start", "text": text}))
     if pcm:
-        for packet in enc.encode_pcm(pcm):
-            await active_ws.send_bytes(pack_audio_frame(packet, BINARY_TYPE_TTS))
+        await stream_tts(active_ws, enc, pcm)
     await active_ws.send_text(json.dumps({"type": "tts", "state": "end"}))
     return {"status": "sent", "pcm_bytes": len(pcm)}
 
@@ -72,8 +95,7 @@ async def debug_notify(text: str = "Reminder: you have a meeting in 10 minutes."
     await active_ws.send_text(json.dumps(
         {"type": "notify", "state": "start", "text": text}))
     if pcm:
-        for packet in enc.encode_pcm(pcm):
-            await active_ws.send_bytes(pack_audio_frame(packet, BINARY_TYPE_TTS))
+        await stream_tts(active_ws, enc, pcm)
     await active_ws.send_text(json.dumps({"type": "notify", "state": "end"}))
     return {"status": "sent", "pcm_bytes": len(pcm)}
 
@@ -101,8 +123,7 @@ async def debug_tone_opus(freq: int = 440, ms: int = 1000):
     enc = OpusStreamEncoder()
     await active_ws.send_text(json.dumps(
         {"type": "tts", "state": "start", "text": ""}))
-    for packet in enc.encode_pcm(pcm):
-        await active_ws.send_bytes(pack_audio_frame(packet, BINARY_TYPE_TTS))
+    await stream_tts(active_ws, enc, pcm)
     await active_ws.send_text(json.dumps({"type": "tts", "state": "end"}))
     return {"status": "sent", "freq": freq, "ms": ms, "pcm_bytes": len(pcm)}
 
@@ -114,7 +135,9 @@ async def websocket_endpoint(websocket: WebSocket):
     active_ws = websocket
     logger.info(f"Client connected: {websocket.client}")
 
+    global active_mcp
     mcp_client = McpClient()
+    active_mcp = mcp_client
     decoder = OpusStreamDecoder()
     encoder = OpusStreamEncoder()
     history = []
@@ -262,9 +285,7 @@ async def _process_utterance(websocket, mcp_client, encoder, history, pcm):
         for sentence in sentences:
             pcm_tts = await asyncio.to_thread(synthesize, sentence)
             if pcm_tts:
-                for packet in encoder.encode_pcm(pcm_tts):
-                    await websocket.send_bytes(
-                        pack_audio_frame(packet, BINARY_TYPE_TTS))
+                await stream_tts(websocket, encoder, pcm_tts)
 
         await websocket.send_text(json.dumps({"type": "tts", "state": "end"}))
 
