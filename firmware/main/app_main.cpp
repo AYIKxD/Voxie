@@ -6,13 +6,17 @@
  */
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <math.h>
 #include <sys/time.h>
 #include "esp_log.h"
+#include "esp_system.h"
 #include "nvs_flash.h"
+#include "nvs.h"
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "esp_mac.h"
+#include "driver/gpio.h"
 #include "cJSON.h"
 
 #include "system/config.h"
@@ -42,6 +46,19 @@
 static const char *TAG = "voxie";
 
 #define FIRMWARE_VERSION "0.1.0"
+
+/// Queue a short sine tone on the speaker as audible feedback.
+static void play_tone(int freq_hz, int ms) {
+    const int n = SPK_SAMPLE_RATE * ms / 1000;
+    int16_t *buf = (int16_t *)malloc(n * sizeof(int16_t));
+    if (!buf) return;
+    for (int i = 0; i < n; i++) {
+        buf[i] = (int16_t)(8000.0f *
+            sinf(2.0f * 3.14159265f * freq_hz * i / SPK_SAMPLE_RATE));
+    }
+    audio_service_write_playback(buf, n, 200);
+    free(buf);
+}
 
 // ============================================================================
 // WebSocket message dispatch
@@ -155,6 +172,16 @@ static void main_event_task(void *arg) {
 
             if (current == DEVICE_STATE_IDLE_LISTENING ||
                 current == DEVICE_STATE_PLAYING_REPLY) {
+                if (!ws_protocol_is_connected()) {
+                    // Without a cloud connection there is nothing to stream to.
+                    // Surface the failure (tone + status) instead of silently
+                    // entering STREAMING and then doing nothing.
+                    ESP_LOGW(TAG, "Wake word detected but server is not connected");
+                    display_manager_show_status("Server offline");
+                    play_tone(300, 250);
+                    continue;  // stays idle
+                }
+
                 state_machine_transition(DEVICE_STATE_STREAMING);
                 display_manager_set_state(DEVICE_STATE_STREAMING);
                 led_strip_set_state(DEVICE_STATE_STREAMING);
@@ -235,6 +262,49 @@ static void button_task(void *arg) {
 }
 
 // ============================================================================
+// Re-provisioning — hold BOOT (GPIO0) for 5 s at startup to erase the saved
+// Wi-Fi/server settings and reboot into the SoftAP setup portal.
+// Ported from xiaozhi's SystemReset (factory reset).
+// ============================================================================
+#define WIFI_NVS_NAMESPACE "voxie_wifi"
+#define RESET_HOLD_MS      5000
+
+static void check_factory_reset_button(void) {
+    gpio_config_t io = {};
+    io.pin_bit_mask = (1ULL << BUTTON_GPIO);
+    io.mode = GPIO_MODE_INPUT;
+    io.pull_up_en = GPIO_PULLUP_ENABLE;
+    io.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    io.intr_type = GPIO_INTR_DISABLE;
+    gpio_config(&io);
+
+    if (gpio_get_level((gpio_num_t)BUTTON_GPIO) != 0) {
+        return;  // button not held
+    }
+
+    ESP_LOGW(TAG, "BOOT held: keep holding %d s to reset Wi-Fi/server settings...",
+             RESET_HOLD_MS / 1000);
+    for (int i = 0; i < RESET_HOLD_MS / 100; i++) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+        if (gpio_get_level((gpio_num_t)BUTTON_GPIO) != 0) {
+            ESP_LOGI(TAG, "Button released early; normal boot");
+            return;
+        }
+    }
+
+    ESP_LOGW(TAG, "Resetting Wi-Fi/server configuration");
+    nvs_handle_t handle;
+    if (nvs_open(WIFI_NVS_NAMESPACE, NVS_READWRITE, &handle) == ESP_OK) {
+        nvs_erase_all(handle);
+        nvs_commit(handle);
+        nvs_close(handle);
+    }
+    ESP_LOGW(TAG, "Rebooting into Wi-Fi setup mode...");
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+}
+
+// ============================================================================
 // Entry point
 // ============================================================================
 
@@ -250,6 +320,11 @@ extern "C" void app_main(void) {
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
+
+    // --- 1b. Factory-reset gesture: hold BOOT for 5 s to clear Wi-Fi/server
+    // config and reboot into the SoftAP setup portal. Must run before any
+    // subsystem reads the saved credentials.
+    check_factory_reset_button();
 
     // --- 2. Initialize TCP/IP and event loop ---
     ESP_ERROR_CHECK(esp_netif_init());
