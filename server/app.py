@@ -143,7 +143,10 @@ async def websocket_endpoint(websocket: WebSocket):
     global active_mcp
     mcp_client = McpClient()
     active_mcp = mcp_client
-    decoder = OpusStreamDecoder()
+    # The device encodes mic audio (OPUS mic frames) at 16 kHz; the TTS
+    # encoder/decoder run at 24 kHz. Decoding mic Opus at the wrong rate
+    # produces audio that Whisper then misreads as garbage.
+    decoder = OpusStreamDecoder(sample_rate=16000)
     encoder = OpusStreamEncoder()
     history = []
 
