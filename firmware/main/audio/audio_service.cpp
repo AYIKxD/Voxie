@@ -3,6 +3,7 @@
 #include "system/settings.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"
 #include "driver/i2s_std.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -22,6 +23,11 @@ static RingbufHandle_t s_playback_ringbuf = NULL;
 // --- Volume (software gain) ---
 #define VOLUME_DEFAULT 70
 #define VOLUME_SETTINGS_NS "voxie_audio"
+
+// Timestamp (us) of the last real (non-silence) audio written to the speaker.
+// Used to suppress the wake-word detector while the device is talking to itself.
+#define PLAYBACK_TAIL_US 900000  // 900 ms decay after the last sample
+static volatile int64_t s_last_audio_us = 0;
 static int s_volume = VOLUME_DEFAULT;  // 0â€“100
 
 // --- DMA buffer for I2S reads/writes ---
@@ -112,6 +118,14 @@ static void i2s_mic_task(void *arg) {
                                           &bytes_read, pdMS_TO_TICKS(100));
         if (ret == ESP_OK && bytes_read > 0) {
             size_t n = bytes_read / sizeof(int32_t);
+            // Half-duplex: while the speaker is playing (plus a short tail),
+            // discard mic audio so the device cannot hear its own TTS, feed it
+            // back to the KWS, and re-trigger itself in a loop. There is no
+            // acoustic echo cancellation, so this is how xiaozhi-style devices
+            // avoid self-interruption. Manual barge-in still works via BOOT.
+            if (audio_service_is_playing()) {
+                continue;
+            }
             // 24-bit sample is left-justified in the 32-bit slot: keep the
             // top 16 bits to produce a 16-bit PCM sample.
             for (size_t i = 0; i < n; i++) {
@@ -154,6 +168,7 @@ static void playback_task(void *arg) {
                 dma_buf[i] = (int16_t)scaled;
             }
             vRingbufferReturnItem(s_playback_ringbuf, item);
+            s_last_audio_us = esp_timer_get_time();
         } else {
             // No audio to play â€” emit silence to keep DMA/amp running cleanly
             memset(dma_buf, 0, sizeof(dma_buf));
@@ -275,4 +290,11 @@ void audio_service_set_volume(int volume) {
 
 int audio_service_get_volume(void) {
     return s_volume;
+}
+
+bool audio_service_is_playing(void) {
+    if (s_last_audio_us == 0) {
+        return false;
+    }
+    return (esp_timer_get_time() - s_last_audio_us) < PLAYBACK_TAIL_US;
 }

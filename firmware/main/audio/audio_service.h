@@ -45,3 +45,8 @@ void audio_service_set_volume(int volume);
 
 /// Get current volume (0–100)
 int audio_service_get_volume(void);
+
+/// True while the speaker is actively producing audio (plus a short tail).
+/// Used to suppress the wake-word detector so the device does not trigger on
+/// its own TTS output (there is no acoustic echo cancellation).
+bool audio_service_is_playing(void);
