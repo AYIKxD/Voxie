@@ -19,14 +19,14 @@
 static const char *TAG = "stream_svc";
 
 #define MONITOR_RINGBUF_SIZE  (MIC_SAMPLE_RATE * 2)          // 1 s of 16-bit mono
-#define PRE_ROLL_MS           800
+#define PRE_ROLL_MS           1000
 #define PRE_ROLL_SAMPLES      (MIC_SAMPLE_RATE * PRE_ROLL_MS / 1000)
 #define OPUS_FRAME_SAMPLES    (MIC_SAMPLE_RATE * OPUS_FRAME_DURATION_MS / 1000)  // 960 @ 16kHz mic
 #define TTS_FRAME_SAMPLES     (SPK_SAMPLE_RATE * OPUS_FRAME_DURATION_MS / 1000)  // 1440 @ 24kHz spk
 #define MAX_TTS_FRAME_SAMPLES (TTS_FRAME_SAMPLES * 2)
 #define VAD_RMS_THRESHOLD     600.0f
-#define VAD_SILENCE_END_MS    500
-#define MAX_STREAM_MS         12000
+#define VAD_SILENCE_END_MS    1000
+#define MAX_STREAM_MS         20000
 
 typedef struct {
     size_t len;
