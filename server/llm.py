@@ -10,6 +10,9 @@ logger = logging.getLogger(__name__)
 
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "openai").lower()
 
+# Lazily created, reused across requests (client construction adds latency).
+_gemini_client = None
+
 SYSTEM_PROMPT = (
     "You are Voxie, a concise and helpful voice assistant running on an ESP32-S3 "
     "device. Keep spoken replies short (1-3 sentences). When the user asks you to "
@@ -86,13 +89,23 @@ async def _generate_gemini(history: list, tools: list):
         contents.append(types.Content(role=role, parts=[types.Part(text=m.get("content", ""))]))
 
     config = types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT)
+    # Disable Gemini "thinking" and use plain Flash behaviour. On the 2.5
+    # models thinking is on by default and adds several seconds before the
+    # first token, which dominates our end-to-end latency.
+    try:
+        config.thinking_config = types.ThinkingConfig(thinking_budget=0)
+    except Exception:
+        logger.warning("thinking_config unsupported on this google-genai version")
     tool_decls = _tools_to_gemini(tools)
     if tool_decls:
         config.tools = tool_decls
 
+    global _gemini_client
+    if _gemini_client is None:
+        _gemini_client = genai.Client(api_key=api_key)
+
     def _call():
-        client = genai.Client(api_key=api_key)
-        return client.models.generate_content(
+        return _gemini_client.models.generate_content(
             model=model_name, contents=contents, config=config)
 
     try:
