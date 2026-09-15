@@ -181,7 +181,7 @@ static void decode_task(void *arg) {
             int samples = opus_decode(s_dec, it->data, (opus_int32)it->len, pcm,
                                       MAX_TTS_FRAME_SAMPLES, 0);
             if (samples > 0) {
-                audio_service_write_playback(pcm, (size_t)samples, pdMS_TO_TICKS(200));
+                audio_service_write_playback(pcm, (size_t)samples, 200);
             } else {
                 ESP_LOGW(TAG, "opus_decode failed: %d", samples);
             }
@@ -294,13 +294,22 @@ void stream_service_handle_tts(const uint8_t *data, size_t len) {
 }
 
 void stream_service_flush_tts(void) {
+    // Set the flag first so decode_task stops calling opus_decode() immediately.
+    // Only after the task is guaranteed to be skipping (flag is checked before
+    // every decode call) is it safe to touch the decoder state or drain the queue.
     s_flush_tts_req = true;
-    audio_service_flush_playback();
-    if (s_dec) opus_decoder_ctl(s_dec, OPUS_RESET_STATE);
 
+    audio_service_flush_playback();
+
+    // Drain any queued TTS packets — decode_task is now skipping all of them.
     tts_item_t *it = NULL;
     while (xQueueReceive(s_tts_queue, &it, 0) == pdTRUE) {
         if (it) free(it);
     }
+
+    // Safe to reset the decoder now: decode_task will not touch it until
+    // s_flush_tts_req is cleared below.
+    if (s_dec) opus_decoder_ctl(s_dec, OPUS_RESET_STATE);
+
     s_flush_tts_req = false;
 }
