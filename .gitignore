@@ -19,6 +19,9 @@ training/assets/
 server/.env
 server/model_cache/
 
+# Captured debug audio (last utterance WAV)
+server/*.wav
+
 # Build / training logs
 *.log
 
