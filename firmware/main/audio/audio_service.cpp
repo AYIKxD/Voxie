@@ -118,14 +118,6 @@ static void i2s_mic_task(void *arg) {
                                           &bytes_read, pdMS_TO_TICKS(100));
         if (ret == ESP_OK && bytes_read > 0) {
             size_t n = bytes_read / sizeof(int32_t);
-            // Half-duplex: while the speaker is playing (plus a short tail),
-            // discard mic audio so the device cannot hear its own TTS, feed it
-            // back to the KWS, and re-trigger itself in a loop. There is no
-            // acoustic echo cancellation, so this is how xiaozhi-style devices
-            // avoid self-interruption. Manual barge-in still works via BOOT.
-            if (audio_service_is_playing()) {
-                continue;
-            }
             // 24-bit sample is left-justified in the 32-bit slot: keep the
             // top 16 bits to produce a 16-bit PCM sample.
             for (size_t i = 0; i < n; i++) {

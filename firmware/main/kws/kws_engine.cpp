@@ -236,12 +236,17 @@ static void kws_task(void* arg) {
         if (avg_prob >= KWS_DETECTION_THRESHOLD) {
             detection_count++;
             if (detection_count >= KWS_SMOOTHING_WINDOW) {
-                ESP_LOGI(TAG, "Wake word detected! Prob: %.2f", (double)avg_prob);
                 device_state_t st = state_machine_get_state();
-                if (st == DEVICE_STATE_IDLE_LISTENING || st == DEVICE_STATE_PLAYING_REPLY) {
+                // Do not trigger on the device's own TTS. The mic stays live
+                // (so speech is never lost), but the wake word is ignored while
+                // the speaker is playing. Without this the device hears its own
+                // voice and loops. Manual barge-in still works via BOOT.
+                if (st == DEVICE_STATE_IDLE_LISTENING && !audio_service_is_playing()) {
+                    ESP_LOGI(TAG, "Wake word detected! Prob: %.2f", (double)avg_prob);
                     xEventGroupSetBits(state_machine_get_events(), EVT_WAKE_WORD_DETECTED);
                 } else {
-                    ESP_LOGI(TAG, "Ignoring wake word (wrong state: %d)", (int)st);
+                    ESP_LOGI(TAG, "Ignoring wake word (state=%d playing=%d)",
+                             (int)st, (int)audio_service_is_playing());
                 }
                 detection_count = 0;
                 hist_count = 0;  // reset averaging after a detection
