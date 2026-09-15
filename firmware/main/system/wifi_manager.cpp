@@ -273,6 +273,17 @@ static void start_sta_connection(const char* ssid, const char* password) {
     if (s_sta_netif == NULL) {
         s_sta_netif = esp_netif_create_default_wifi_sta();
     }
+
+    // Advertise a friendly DHCP hostname ("Voxie-XXXX") instead of "espressif"
+    // so the device is recognizable in the router's client list (xiaozhi
+    // does the same in WifiBoard::StartNetwork).
+    uint8_t mac[6];
+    if (esp_read_mac(mac, ESP_MAC_WIFI_STA) == ESP_OK) {
+        char hostname[32];
+        snprintf(hostname, sizeof(hostname), "%s-%02X%02X",
+                 SOFTAP_SSID_PREFIX, mac[4], mac[5]);
+        esp_netif_set_hostname(s_sta_netif, hostname);
+    }
     
     wifi_config_t wifi_config = {};
     strncpy((char*)wifi_config.sta.ssid, ssid, sizeof(wifi_config.sta.ssid) - 1);
