@@ -3,12 +3,15 @@
 #include "audio/audio_service.h"
 #include "system/config.h"
 #include "system/state_machine.h"
+#include "system/ota_manager.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_chip_info.h"
 #include "esp_app_desc.h"
 #include "esp_mac.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -114,6 +117,60 @@ static McpResult tool_reboot(const std::string &args) {
     return {"Rebooting...", false};  // Won't reach here
 }
 
+static McpResult tool_upgrade_firmware(const std::string &args) {
+    // Parse "url" from args JSON
+    const char *p = strstr(args.c_str(), "\"url\"");
+    if (!p) {
+        return {"Missing 'url' parameter", true};
+    }
+    p = strchr(p + 5, ':');
+    if (!p) {
+        return {"Missing 'url' parameter", true};
+    }
+    p = strchr(p, '"');
+    if (!p) {
+        return {"Missing 'url' parameter", true};
+    }
+    p++;
+    const char *end = strchr(p, '"');
+    if (!end) {
+        return {"Missing 'url' parameter", true};
+    }
+    size_t ulen = end - p;
+    if (ulen == 0 || ulen >= 512) {
+        return {"Invalid firmware URL", true};
+    }
+    char url[512];
+    memcpy(url, p, ulen);
+    url[ulen] = '\0';
+
+    ESP_LOGW(TAG, "Firmware upgrade requested via MCP: %s", url);
+
+    // Run OTA in a detached task so this tool returns a response before the
+    // device transitions to UPGRADING / reboots (xiaozhi schedules this on
+    // the application task; we spawn a worker to keep the MCP path snappy).
+    char *url_copy = strdup(url);
+    if (url_copy == nullptr) {
+        return {"Out of memory", true};
+    }
+    if (xTaskCreatePinnedToCore(
+            [](void *arg) {
+                char *u = (char *)arg;
+                esp_err_t ret = ota_start_update(u);
+                if (ret != ESP_OK) {
+                    ESP_LOGE(TAG, "OTA failed: %s", esp_err_to_name(ret));
+                }
+                free(u);
+                vTaskDelete(NULL);
+            },
+            "ota_upgrade", 8192, url_copy, 5, NULL, 1) != pdPASS) {
+        free(url_copy);
+        return {"Failed to start OTA task", true};
+    }
+
+    return {"Firmware upgrade started. The device will reboot when complete.", false};
+}
+
 // ============================================================================
 // Registration
 // ============================================================================
@@ -159,6 +216,14 @@ void builtin_tools_register(void) {
         "Restart the device after a 1 second delay",
         R"({"type":"object","properties":{}})",
         tool_reboot
+    );
+
+    mcp_server_add_tool(
+        "self.upgrade_firmware",
+        "Upgrade firmware from a firmware binary URL. Downloads and installs "
+        "the new firmware, then reboots the device.",
+        R"({"type":"object","properties":{"url":{"type":"string","description":"URL of the firmware binary to download and install"}},"required":["url"]})",
+        tool_upgrade_firmware
     );
 
     ESP_LOGI(TAG, "Built-in MCP tools registered (%zu tools)", mcp_server_tool_count());
