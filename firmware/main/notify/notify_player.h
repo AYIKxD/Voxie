@@ -6,23 +6,30 @@
 /**
  * Notify Player — handles async cloud-pushed voice notifications.
  *
- * When the cloud sends a "notify" message to an idle device:
- * 1. Device transitions to NOTIFYING state
- * 2. Plays notification audio (Opus via HTTP URL or inline)
- * 3. Shows notification text on display
- * 4. Returns to IDLE_LISTENING when done
- * 5. Wake word or button press cancels notification
+ * When the cloud pushes an unsolicited notification to an idle device:
+ *   1. Server sends {"type":"notify","state":"start","text":"..."}
+ *      -> device enters NOTIFYING and shows the text
+ *   2. Server streams the spoken text as Opus binary frames on the existing
+ *      TTS audio path (stream_service decodes + plays them)
+ *   3. Server sends {"type":"notify","state":"end"}
+ *      -> device returns to IDLE_LISTENING
+ *
+ * A wake word, button press, or server disconnect cancels the notification.
  */
 
 /// Initialize the notification player
 void notify_player_init(void);
 
-/// Play a notification. text is shown on display, audio_url is fetched and played.
-/// Non-blocking — spawns a task to handle download and playback.
-void notify_player_play(const char *text, const char *audio_url);
+/// Begin a notification: shows `text` and enters the NOTIFYING state.
+/// Ignored unless the device is idle. Audio frames that follow are played
+/// by the shared TTS pipeline.
+void notify_player_start(const char *text);
+
+/// End the current notification and return to idle.
+void notify_player_end(void);
 
 /// Cancel current notification playback (e.g. on wake word barge-in)
 void notify_player_cancel(void);
 
-/// Check if a notification is currently playing
+/// Check if a notification is currently active
 bool notify_player_is_playing(void);

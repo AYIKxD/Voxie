@@ -98,10 +98,16 @@ static void on_ws_text_message(const char *json_str, size_t len) {
     }
 #endif
     else if (strcmp(type, "notify") == 0) {
-        // Async notification from cloud
+        // Async notification from cloud: "start" shows the text and enters
+        // NOTIFYING (spoken audio follows as TTS binary frames); "end" returns
+        // to idle.
+        const char *state = cJSON_GetStringValue(cJSON_GetObjectItem(root, "state"));
         const char *text = cJSON_GetStringValue(cJSON_GetObjectItem(root, "text"));
-        const char *url = cJSON_GetStringValue(cJSON_GetObjectItem(root, "audio_url"));
-        notify_player_play(text ? text : "", url ? url : "");
+        if (state && strcmp(state, "end") == 0) {
+            notify_player_end();
+        } else {
+            notify_player_start(text ? text : "");
+        }
     }
     else if (strcmp(type, "hello") == 0) {
         // Server hello response — connection established
