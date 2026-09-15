@@ -99,13 +99,15 @@ void ws_protocol_connect(const char *server_url) {
     esp_websocket_client_config_t ws_cfg = {};
     ws_cfg.uri = server_url;
     ws_cfg.reconnect_timeout_ms = WS_RECONNECT_INTERVAL_MS;
-    ws_cfg.network_timeout_ms = 10000;
+    // The server may take 10-20 s to ASR + LLM before the first TTS frame.
+    // A short network timeout dropped the socket mid-reply; keep it generous
+    // and rely on frequent ping/pong for liveness.
+    ws_cfg.network_timeout_ms = 45000;
     ws_cfg.buffer_size = 4096;
     // Keepalive: without ping/pong a half-open connection (server restarted,
     // Wi-Fi dropped) is never detected and the device hangs in a stale state.
-    // Ping every 10s; if no pong within 5s the client closes and reconnects.
-    ws_cfg.ping_interval_sec = 10;
-    ws_cfg.pingpong_timeout_sec = 5;
+    ws_cfg.ping_interval_sec = 5;
+    ws_cfg.pingpong_timeout_sec = 15;
 
     s_ws_client = esp_websocket_client_init(&ws_cfg);
     if (s_ws_client == NULL) {
