@@ -7,6 +7,8 @@
 
 static const char* TAG = "DisplayManager";
 static bool s_dark_theme = true;
+static device_state_t s_last_state = DEVICE_STATE_CONNECTING;
+static bool s_state_valid = false;
 
 void display_manager_init(void) {
     ESP_LOGI(TAG, "Initializing display manager");
@@ -46,6 +48,15 @@ void display_manager_init(void) {
 }
 
 void display_manager_set_state(device_state_t state) {
+    // Skip no-op updates. The main loop re-asserts the state every second as
+    // a safety net, and without this guard that produced a log line (and a
+    // full redraw) per second even when nothing changed.
+    if (s_state_valid && state == s_last_state) {
+        return;
+    }
+    s_last_state = state;
+    s_state_valid = true;
+
     ESP_LOGI(TAG, "Display state changed to %d", (int)state);
 #if VOXIE_ENABLE_LCD
 #ifdef VOXIE_HAS_LVGL

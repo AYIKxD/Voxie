@@ -72,6 +72,11 @@ void led_strip_init(void) {
 }
 
 void led_strip_set_state(device_state_t state) {
+    // Ignore redundant updates (the main loop re-asserts state every second)
+    // so re-setting the same state does not spam the log or restart effects.
+    if (state == s_current_state) {
+        return;
+    }
     s_current_state = state;
     ESP_LOGI(TAG, "LED state changed to %d", (int)state);
 }
