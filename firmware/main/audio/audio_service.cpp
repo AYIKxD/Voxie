@@ -1,5 +1,6 @@
-#include "audio_service.h"
+﻿#include "audio_service.h"
 #include "system/config.h"
+#include "system/settings.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "driver/i2s_std.h"
@@ -19,7 +20,9 @@ static RingbufHandle_t s_mic_ringbuf = NULL;
 static RingbufHandle_t s_playback_ringbuf = NULL;
 
 // --- Volume (software gain) ---
-static int s_volume = 70;  // 0–100
+#define VOLUME_DEFAULT 70
+#define VOLUME_SETTINGS_NS "voxie_audio"
+static int s_volume = VOLUME_DEFAULT;  // 0â€“100
 
 // --- DMA buffer for I2S reads/writes ---
 #define DMA_BUF_LEN_SAMPLES  512
@@ -94,7 +97,7 @@ static void init_i2s_speaker(void) {
 // FreeRTOS tasks
 // ============================================================================
 
-/// Mic capture task — reads I2S DMA and pushes raw PCM into the mic ring buffer.
+/// Mic capture task â€” reads I2S DMA and pushes raw PCM into the mic ring buffer.
 /// Pinned to Core 0 for deterministic timing alongside KWS.
 static void i2s_mic_task(void *arg) {
     // Static buffers: these are too large to keep on the task stack.
@@ -120,7 +123,7 @@ static void i2s_mic_task(void *arg) {
     }
 }
 
-/// Playback task — pulls PCM from the playback ring buffer and writes to I2S speaker.
+/// Playback task â€” pulls PCM from the playback ring buffer and writes to I2S speaker.
 static void playback_task(void *arg) {
     // Static buffers: these are too large to keep on the task stack.
     static int32_t dma_buf32[DMA_BUF_LEN_SAMPLES];
@@ -155,7 +158,7 @@ static void playback_task(void *arg) {
             }
             vRingbufferReturnItem(s_playback_ringbuf, item);
         } else {
-            // No audio to play — emit silence to keep DMA/amp running cleanly
+            // No audio to play â€” emit silence to keep DMA/amp running cleanly
             memset(dma_buf32, 0, sizeof(dma_buf32));
             num_samples = DMA_BUF_LEN_SAMPLES;
         }
@@ -190,11 +193,18 @@ void audio_service_init(void) {
     s_playback_ringbuf = create_audio_ringbuf(AUDIO_RING_BUFFER_SIZE);
     configASSERT(s_playback_ringbuf != NULL);
 
+    // Restore the last user-selected volume (persisted in NVS)
+    if (settings_open(VOLUME_SETTINGS_NS, false)) {
+        s_volume = settings_get_int("volume", VOLUME_DEFAULT);
+        settings_close();
+    }
+
     // Initialize I2S hardware
     init_i2s_mic();
     init_i2s_speaker();
 
-    ESP_LOGI(TAG, "Audio service initialized (ring buf: %d bytes each)", AUDIO_RING_BUFFER_SIZE);
+    ESP_LOGI(TAG, "Audio service initialized (ring buf: %d bytes each, volume %d%%)",
+             AUDIO_RING_BUFFER_SIZE, s_volume);
 }
 
 void audio_service_start(void) {
@@ -252,6 +262,12 @@ void audio_service_set_volume(int volume) {
     if (volume > 100) volume = 100;
     s_volume = volume;
     ESP_LOGI(TAG, "Volume set to %d%%", s_volume);
+
+    // Persist so the choice survives reboots (xiaozhi keeps this in NVS too)
+    if (settings_open(VOLUME_SETTINGS_NS, true)) {
+        settings_set_int("volume", s_volume);
+        settings_close();
+    }
 }
 
 int audio_service_get_volume(void) {
