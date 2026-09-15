@@ -49,7 +49,7 @@ out of scope (see `build.md` §0.3).
 | BluFi (BLE) Wi-Fi provisioning | `boards/common/blufi.*` | SoftAP captive portal already ships; BLE stack adds flash/RAM. Needs hardware validation. |
 | Power-save timer / light sleep | `boards/common/power_save_timer.*` | Requires `esp_pm` + WiFi coexistence tuning; risky to change without hardware test. High value for the efficiency criterion — revisit with a device. |
 | ADC/AXP2101 battery monitoring | `boards/common/*battery*` | Voxie hardware has no battery gauge wired. |
-| On-device / server-side AEC modes | `AecMode`, AFE wake-word engine | Server-side AEC needs a host DSP pipeline; device AEC already partially via AFE. |
+| On-device / server-side AEC modes | `AecMode`, AFE wake-word engine | Server-side AEC needs a host DSP pipeline. ESP-SR AFE is **disabled** (see commit note below): it needs a proprietary WakeNet `model` partition and would replace our open-source TFLite KWS. |
 | UDP audio debugger | `main/audio/audio_debugger.*` | Useful for KWS tuning; needs a host listener tool. Candidate next. |
 | LVGL/OLED rendering | `main/display/**` | `display_manager` is still log/stub-only; a full display stack is a larger, hardware-validated effort. |
 | Dynamic text glyph push | `docs/glyph-push.md` | Only relevant with a real display stack. |
@@ -61,3 +61,17 @@ All adopted changes build cleanly with ESP-IDF v6.1 (`idf.py build`,
 target `esp32s3`). Changes that alter runtime audio/UI behavior (volume
 persistence, notifications, disconnect recovery) have **not** been validated on
 physical hardware yet.
+
+## Known issue fixed: AFE disabled
+
+Commit `722349f` wired ESP-SR AFE into the mic path: when `VOXIE_HAS_AFE=1`,
+`kws_engine` reads audio only from `kws_audio_ringbuf`, which is fed solely by
+the AFE task. AFE needs a `model` partition (`esp_srmodel_init("model")`) that
+this project does not ship, so AFE init failed, its task never started, and
+nothing fed KWS or `stream_service` — the wake word never fired.
+
+`VOXIE_HAS_AFE` is now `0` (the default in `config.h`): `kws_engine` reads the
+I2S mic directly and forwards audio to `stream_service`, which restores wake
+word detection. This also matches `build.md` §0.3, which explicitly rejects
+ESP-SR/WakeNet in favor of the TFLite microWakeWord engine.
+

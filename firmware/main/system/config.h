@@ -10,8 +10,18 @@
 #define VOXIE_WAKE_WORD          "Hey Voxie"
 
 // --- Feature Flags (set via menuconfig or sdkconfig.defaults) ---
+
+// ESP-SR AFE (noise suppression + WakeNet) is DISABLED by design:
+//  - build.md §0.3 explicitly rejects ESP-SR/WakeNet (proprietary pre-trained
+//    wake models) in favour of our own TFLite microWakeWord engine.
+//  - AFE requires a "model" partition that this project does not ship.
+//  - When enabled, the AFE task owns the mic and feeds the KWS/stream
+//    pipelines; if it fails to init (no model partition) nothing is fed and
+//    the wake word never fires.
+// With AFE off, kws_engine reads the mic directly and forwards audio to
+// stream_service (see kws_engine.cpp feature_task).
 #ifndef VOXIE_HAS_AFE
-#define VOXIE_HAS_AFE 1
+#define VOXIE_HAS_AFE 0
 #endif
 
 #ifndef VOXIE_ENABLE_MCP
