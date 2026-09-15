@@ -135,6 +135,15 @@ static void on_ws_text_message(const char *json_str, size_t len) {
         ESP_LOGI(TAG, "Remote wake trigger received");
         xEventGroupSetBits(state_machine_get_events(), EVT_WAKE_WORD_DETECTED);
     }
+    else if (strcmp(type, "tone") == 0) {
+        // Debug: play a locally generated sine tone (tests I2S/amp only).
+        cJSON *freq_item = cJSON_GetObjectItem(root, "freq");
+        cJSON *ms_item = cJSON_GetObjectItem(root, "ms");
+        int freq = cJSON_IsNumber(freq_item) ? freq_item->valueint : 440;
+        int ms = cJSON_IsNumber(ms_item) ? ms_item->valueint : 1000;
+        ESP_LOGI(TAG, "Tone test: %d Hz for %d ms", freq, ms);
+        play_tone(freq, ms);
+    }
 
     cJSON_Delete(root);
 }

@@ -78,6 +78,35 @@ async def debug_notify(text: str = "Reminder: you have a meeting in 10 minutes."
     return {"status": "sent", "pcm_bytes": len(pcm)}
 
 
+@app.get("/debug/tone")
+async def debug_tone(freq: int = 440, ms: int = 1000):
+    """Ask the device to generate a local sine tone (tests I2S/amp only)."""
+    if active_ws is None:
+        return {"status": "no device connected"}
+    await active_ws.send_text(json.dumps(
+        {"type": "tone", "freq": freq, "ms": ms}))
+    return {"status": "sent", "freq": freq, "ms": ms}
+
+
+@app.get("/debug/tone-opus")
+async def debug_tone_opus(freq: int = 440, ms: int = 1000):
+    """Send a pure sine through the Opus TTS path (tests codec + transport)."""
+    if active_ws is None:
+        return {"status": "no device connected"}
+    import numpy as np
+
+    t = np.arange(int(24000 * ms / 1000)) / 24000.0
+    pcm = (np.sin(2 * np.pi * freq * t) * 16000.0).astype("<i2").tobytes()
+
+    enc = OpusStreamEncoder()
+    await active_ws.send_text(json.dumps(
+        {"type": "tts", "state": "start", "text": ""}))
+    for packet in enc.encode_pcm(pcm):
+        await active_ws.send_bytes(pack_audio_frame(packet, BINARY_TYPE_TTS))
+    await active_ws.send_text(json.dumps({"type": "tts", "state": "end"}))
+    return {"status": "sent", "freq": freq, "ms": ms, "pcm_bytes": len(pcm)}
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     global active_ws
