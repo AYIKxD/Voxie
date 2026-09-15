@@ -37,7 +37,12 @@ TTS_PACE_S = (OPUS_FRAME_MS / 1000.0) * 0.8
 async def stream_tts(ws, encoder: OpusStreamEncoder, pcm: bytes):
     """Encode PCM and stream it as paced Opus TTS frames."""
     for packet in encoder.encode_pcm(pcm):
-        await ws.send_bytes(pack_audio_frame(packet, BINARY_TYPE_TTS))
+        try:
+            await ws.send_bytes(pack_audio_frame(packet, BINARY_TYPE_TTS))
+        except Exception as e:
+            # Device disconnected or send failed; stop cleanly.
+            logger.warning(f"TTS stream aborted: {e}")
+            return
         await asyncio.sleep(TTS_PACE_S)
 
 
