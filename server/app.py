@@ -62,6 +62,22 @@ async def debug_tts(text: str = "Hello, I am Voxie."):
     return {"status": "sent", "pcm_bytes": len(pcm)}
 
 
+@app.get("/debug/notify")
+async def debug_notify(text: str = "Reminder: you have a meeting in 10 minutes."):
+    """Push an async spoken notification to the device (idle path)."""
+    if active_ws is None:
+        return {"status": "no device connected"}
+    enc = OpusStreamEncoder()
+    pcm = synthesize(text)
+    await active_ws.send_text(json.dumps(
+        {"type": "notify", "state": "start", "text": text}))
+    if pcm:
+        for packet in enc.encode_pcm(pcm):
+            await active_ws.send_bytes(pack_audio_frame(packet, BINARY_TYPE_TTS))
+    await active_ws.send_text(json.dumps({"type": "notify", "state": "end"}))
+    return {"status": "sent", "pcm_bytes": len(pcm)}
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     global active_ws
