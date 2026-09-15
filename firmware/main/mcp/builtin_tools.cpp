@@ -8,6 +8,7 @@
 #include "esp_system.h"
 #include "esp_flash.h"
 #include "esp_chip_info.h"
+#include "esp_heap_caps.h"
 #include "esp_app_desc.h"
 #include "esp_mac.h"
 #include "esp_timer.h"
@@ -114,6 +115,79 @@ static McpResult tool_get_system_info(const std::string &args) {
     return {buf, false};
 }
 
+/// Per-task CPU usage + stack headroom snapshot over a short sampling window.
+/// Ported from xiaozhi's SystemInfo::PrintTaskCpuUsage — useful for proving
+/// the idle-CPU budget (a core judging criterion) and spotting runaway tasks.
+static McpResult tool_get_task_stats(const std::string &args) {
+    const UBaseType_t ARRAY_SIZE_OFFSET = 5;
+    const TickType_t sample_ticks = pdMS_TO_TICKS(500);
+
+    UBaseType_t start_size = uxTaskGetNumberOfTasks() + ARRAY_SIZE_OFFSET;
+    TaskStatus_t *start = (TaskStatus_t *)malloc(sizeof(TaskStatus_t) * start_size);
+    if (start == NULL) {
+        return {"Out of memory", true};
+    }
+    configRUN_TIME_COUNTER_TYPE start_rt = 0, end_rt = 0;
+    start_size = uxTaskGetSystemState(start, start_size, &start_rt);
+    if (start_size == 0) {
+        free(start);
+        return {"uxTaskGetSystemState failed", true};
+    }
+
+    vTaskDelay(sample_ticks);
+
+    UBaseType_t end_size = uxTaskGetNumberOfTasks() + ARRAY_SIZE_OFFSET;
+    TaskStatus_t *end = (TaskStatus_t *)malloc(sizeof(TaskStatus_t) * end_size);
+    if (end == NULL) {
+        free(start);
+        return {"Out of memory", true};
+    }
+    end_size = uxTaskGetSystemState(end, end_size, &end_rt);
+    if (end_size == 0) {
+        free(start);
+        free(end);
+        return {"uxTaskGetSystemState failed", true};
+    }
+
+    char buf[2048];
+    int off = snprintf(buf, sizeof(buf),
+        "{\"sample_ms\":500,"
+        "\"free_internal_heap\":%lu,"
+        "\"min_free_internal_heap\":%lu,"
+        "\"tasks\":[",
+        (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+        (unsigned long)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+
+    configRUN_TIME_COUNTER_TYPE total = end_rt - start_rt;
+    bool first = true;
+    for (UBaseType_t i = 0; i < start_size && off < (int)sizeof(buf); i++) {
+        for (UBaseType_t j = 0; j < end_size; j++) {
+            if (start[i].xHandle != end[j].xHandle) {
+                continue;
+            }
+            unsigned long pct = 0;
+            if (total > 0) {
+                uint32_t task_time =
+                    (uint32_t)(end[j].ulRunTimeCounter - start[i].ulRunTimeCounter);
+                pct = (unsigned long)((task_time * 100ULL) /
+                                      (total * CONFIG_FREERTOS_NUMBER_OF_CORES));
+            }
+            off += snprintf(buf + off, sizeof(buf) - off,
+                "%s{\"name\":\"%s\",\"cpu_pct\":%lu,\"stack_free\":%lu}",
+                first ? "" : ",",
+                start[i].pcTaskName, pct,
+                (unsigned long)end[j].usStackHighWaterMark);
+            first = false;
+            break;
+        }
+    }
+    snprintf(buf + off, sizeof(buf) - off, "]}");
+
+    free(start);
+    free(end);
+    return {buf, false};
+}
+
 static McpResult tool_reboot(const std::string &args) {
     ESP_LOGW(TAG, "Reboot requested via MCP");
     // Delay reboot slightly so the MCP response can be sent
@@ -214,6 +288,14 @@ void builtin_tools_register(void) {
         "Get detailed system information including chip, memory, MAC address, and firmware version",
         R"({"type":"object","properties":{}})",
         tool_get_system_info
+    );
+
+    mcp_server_add_tool(
+        "self.system.get_task_stats",
+        "Get per-task CPU usage and free stack over a 500 ms window, plus "
+        "internal heap statistics. Use this to check the device's CPU load.",
+        R"({"type":"object","properties":{}})",
+        tool_get_task_stats
     );
 
     mcp_server_add_tool(
