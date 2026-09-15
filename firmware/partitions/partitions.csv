@@ -1,10 +1,10 @@
 # NVS partition for Wi-Fi credentials, config, etc.
 nvs,      data, nvs,     0x9000,   0x6000,
 phy_init, data, phy,     0xf000,   0x1000,
-# Dual OTA app partitions
-app0,     app,  ota_0,   0x10000,  0x1E0000,
-app1,     app,  ota_1,   0x1F0000, 0x1E0000,
+# Dual OTA app partitions (3 MB each; 8 MB flash leaves room to grow)
+app0,     app,  ota_0,   0x10000,  0x300000,
+app1,     app,  ota_1,   0x310000, 0x300000,
 # OTA data partition (tracks which slot is active)
-otadata,  data, ota,     0x3D0000, 0x2000,
+otadata,  data, ota,     0x610000, 0x2000,
 # Assets (fonts, sounds)
-assets,   data, spiffs,  0x3D2000, 0x2E000,
+assets,   data, spiffs,  0x612000, 0x2E000,
