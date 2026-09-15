@@ -90,10 +90,16 @@ static std::string handle_initialize(int id) {
 }
 
 static std::string handle_tools_list(int id, cJSON *request) {
-    // Support pagination via cursor. Keep the std::string alive for the
-    // duration of the parse (c_str() on a temporary would dangle).
-    std::string cursor_str = json_get_string(request, "cursor");
-    int cursor = cursor_str.empty() ? 0 : atoi(cursor_str.c_str());
+    // Pagination cursor lives under "params" ({"params":{"cursor":"10"}}),
+    // with a fallback to the request root for lenient clients. Looking only at
+    // the root made every page return page 0 and looped the server forever.
+    cJSON *params = cJSON_GetObjectItem(request, "params");
+    cJSON *cursor_item = params ? cJSON_GetObjectItem(params, "cursor") : NULL;
+    if (cursor_item == NULL) {
+        cursor_item = cJSON_GetObjectItem(request, "cursor");
+    }
+    const char *cursor_str = cJSON_GetStringValue(cursor_item);
+    int cursor = cursor_str ? atoi(cursor_str) : 0;
     if (cursor < 0) cursor = 0;
     const int page_size = 10;
 
