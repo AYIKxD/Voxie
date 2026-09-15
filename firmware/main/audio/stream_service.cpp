@@ -181,7 +181,7 @@ static void decode_task(void *arg) {
             int samples = opus_decode(s_dec, it->data, (opus_int32)it->len, pcm,
                                       MAX_TTS_FRAME_SAMPLES, 0);
             if (samples > 0) {
-                audio_service_write_playback(pcm, (size_t)samples, 200);
+                audio_service_write_playback(pcm, (size_t)samples, 1000);
             } else {
                 ESP_LOGW(TAG, "opus_decode failed: %d", samples);
             }
@@ -219,7 +219,11 @@ void stream_service_init(void) {
         s_dec = NULL;
     }
 
-    s_tts_queue = xQueueCreate(48, sizeof(tts_item_t *));
+    // Deep queue: the server streams a whole TTS reply as a burst (e.g. 8 s of
+    // speech = ~134 x 60 ms Opus frames). The decode task can only drain at
+    // real-time, so a shallow queue dropped most of the reply and produced
+    // glitchy/buzzy audio. 320 frames (~19 s) comfortably absorbs a reply.
+    s_tts_queue = xQueueCreate(320, sizeof(tts_item_t *));
 
     xTaskCreatePinnedToCore(stream_task, "opus_enc", STACK_OPUS_ENCODE, NULL, 6,
                             &s_stream_task, 1);
@@ -288,8 +292,8 @@ void stream_service_handle_tts(const uint8_t *data, size_t len) {
     it->len = payload_len;
     memcpy(it->data, data + BINARY_HEADER_SIZE, payload_len);
 
-    if (xQueueSend(s_tts_queue, &it, 0) != pdTRUE) {
-        free(it);  // queue full: drop frame
+    if (xQueueSend(s_tts_queue, &it, pdMS_TO_TICKS(20)) != pdTRUE) {
+        free(it);  // queue still full: drop frame
     }
 }
 
