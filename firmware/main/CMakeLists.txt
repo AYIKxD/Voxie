@@ -34,6 +34,7 @@ idf_component_register(
         esp_timer
         nvs_flash
         cjson
+        spi_flash
         esp_websocket_client
         esp-tls
         esp-tflite-micro

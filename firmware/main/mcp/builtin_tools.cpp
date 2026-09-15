@@ -6,6 +6,7 @@
 #include "system/ota_manager.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_flash.h"
 #include "esp_chip_info.h"
 #include "esp_app_desc.h"
 #include "esp_mac.h"
@@ -87,11 +88,15 @@ static McpResult tool_get_system_info(const std::string &args) {
     uint8_t mac[6];
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
 
+    // Real flash size (xiaozhi's SystemInfo::GetFlashSize)
+    uint32_t flash_size = 0;
+    esp_flash_get_size(NULL, &flash_size);
+
     char buf[512];
     snprintf(buf, sizeof(buf),
         "{\"chip\":\"ESP32-S3\","
         "\"cores\":%d,"
-        "\"flash_size_mb\":%d,"
+        "\"flash_size_mb\":%lu,"
         "\"free_heap\":%lu,"
         "\"min_free_heap\":%lu,"
         "\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\","
@@ -99,7 +104,7 @@ static McpResult tool_get_system_info(const std::string &args) {
         "\"compile_time\":\"%s %s\","
         "\"idf_version\":\"%s\"}",
         chip_info.cores,
-        4,  // placeholder, use spi_flash_get_chip_size()/1024/1024 for actual
+        (unsigned long)(flash_size / (1024 * 1024)),
         (unsigned long)esp_get_free_heap_size(),
         (unsigned long)esp_get_minimum_free_heap_size(),
         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
