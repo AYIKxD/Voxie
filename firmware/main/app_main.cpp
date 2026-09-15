@@ -13,6 +13,7 @@
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "esp_mac.h"
+#include "cJSON.h"
 
 #include "system/config.h"
 #include "system/state_machine.h"
@@ -45,59 +46,50 @@ static const char *TAG = "voxie";
 // ============================================================================
 // WebSocket message dispatch
 // ============================================================================
-
 /// Handle incoming JSON text messages from the cloud server
 static void on_ws_text_message(const char *json_str, size_t len) {
-    // Simple type dispatch — extract "type" field
-    const char *type_pos = strstr(json_str, "\"type\":");
-    if (!type_pos) return;
+    // Parse with cJSON (xiaozhi-style robust dispatch) instead of strstr
+    // scanning, which breaks on servers that emit "key": "value" spacing.
+    cJSON *root = cJSON_ParseWithLength(json_str, len);
+    if (root == NULL) {
+        ESP_LOGW(TAG, "Invalid JSON from server, ignoring");
+        return;
+    }
 
-    if (strstr(type_pos, "\"stt\"")) {
+    const char *type = cJSON_GetStringValue(cJSON_GetObjectItem(root, "type"));
+    if (type == NULL) {
+        cJSON_Delete(root);
+        return;
+    }
+
+    if (strcmp(type, "stt") == 0) {
         // Live transcript from ASR — show on display
-        const char *text_pos = strstr(json_str, "\"text\":\"");
-        if (text_pos) {
-            text_pos += 8;
-            char text[256];
-            const char *end = strchr(text_pos, '"');
-            if (end) {
-                size_t tlen = end - text_pos;
-                if (tlen >= sizeof(text)) tlen = sizeof(text) - 1;
-                memcpy(text, text_pos, tlen);
-                text[tlen] = '\0';
-                display_manager_show_transcript(text, true);  // user speech
-            }
+        const char *text = cJSON_GetStringValue(cJSON_GetObjectItem(root, "text"));
+        if (text) {
+            display_manager_show_transcript(text, true);  // user speech
         }
     }
-    else if (strstr(type_pos, "\"tts\"")) {
+    else if (strcmp(type, "tts") == 0) {
         // TTS lifecycle
-        if (strstr(json_str, "\"start\"")) {
+        const char *state = cJSON_GetStringValue(cJSON_GetObjectItem(root, "state"));
+        const char *text = cJSON_GetStringValue(cJSON_GetObjectItem(root, "text"));
+        if (state && strcmp(state, "start") == 0) {
             state_machine_transition(DEVICE_STATE_PLAYING_REPLY);
-            // Extract reply text for display
-            const char *text_pos = strstr(json_str, "\"text\":\"");
-            if (text_pos) {
-                text_pos += 8;
-                char text[512];
-                const char *end = strchr(text_pos, '"');
-                if (end) {
-                    size_t tlen = end - text_pos;
-                    if (tlen >= sizeof(text)) tlen = sizeof(text) - 1;
-                    memcpy(text, text_pos, tlen);
-                    text[tlen] = '\0';
-                    display_manager_show_transcript(text, false);  // assistant reply
-                }
+            if (text) {
+                display_manager_show_transcript(text, false);  // assistant reply
             }
-        } else if (strstr(json_str, "\"end\"")) {
+        } else if (state && strcmp(state, "end") == 0) {
             state_machine_transition(DEVICE_STATE_IDLE_LISTENING);
         }
     }
-    else if (strstr(type_pos, "\"llm\"")) {
+    else if (strcmp(type, "llm") == 0) {
         // Emotion updates for display animations
         // TODO: parse emotion and update display face
     }
 #if VOXIE_ENABLE_MCP
-    else if (strstr(type_pos, "\"mcp\"")) {
+    else if (strcmp(type, "mcp") == 0) {
         // MCP request from server → device
-        if (strstr(json_str, "\"method\"")) {
+        if (cJSON_GetObjectItem(root, "method") != NULL) {
             // This is an MCP request (tools/call, etc.)
             std::string response = mcp_server_handle_request(std::string(json_str, len));
             ws_protocol_send_text(response.c_str());
@@ -105,44 +97,23 @@ static void on_ws_text_message(const char *json_str, size_t len) {
         // MCP responses from device are sent proactively, not handled here
     }
 #endif
-    else if (strstr(type_pos, "\"notify\"")) {
+    else if (strcmp(type, "notify") == 0) {
         // Async notification from cloud
-        const char *text_pos = strstr(json_str, "\"text\":\"");
-        const char *url_pos = strstr(json_str, "\"audio_url\":\"");
-        char text[256] = "";
-        char url[512] = "";
-
-        if (text_pos) {
-            text_pos += 8;
-            const char *end = strchr(text_pos, '"');
-            if (end) {
-                size_t tlen = end - text_pos;
-                if (tlen >= sizeof(text)) tlen = sizeof(text) - 1;
-                memcpy(text, text_pos, tlen);
-                text[tlen] = '\0';
-            }
-        }
-        if (url_pos) {
-            url_pos += 13;
-            const char *end = strchr(url_pos, '"');
-            if (end) {
-                size_t ulen = end - url_pos;
-                if (ulen >= sizeof(url)) ulen = sizeof(url) - 1;
-                memcpy(url, url_pos, ulen);
-                url[ulen] = '\0';
-            }
-        }
-        notify_player_play(text, url);
+        const char *text = cJSON_GetStringValue(cJSON_GetObjectItem(root, "text"));
+        const char *url = cJSON_GetStringValue(cJSON_GetObjectItem(root, "audio_url"));
+        notify_player_play(text ? text : "", url ? url : "");
     }
-    else if (strstr(type_pos, "\"hello\"")) {
+    else if (strcmp(type, "hello") == 0) {
         // Server hello response — connection established
         ESP_LOGI(TAG, "Server hello received, session established");
     }
-    else if (strstr(type_pos, "\"wake\"")) {
+    else if (strcmp(type, "wake") == 0) {
         // Remote debug/test trigger: behave as if a wake word fired.
         ESP_LOGI(TAG, "Remote wake trigger received");
         xEventGroupSetBits(state_machine_get_events(), EVT_WAKE_WORD_DETECTED);
     }
+
+    cJSON_Delete(root);
 }
 
 /// Handle incoming binary messages (Opus TTS audio from cloud)
