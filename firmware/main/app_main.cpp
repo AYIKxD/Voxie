@@ -319,6 +319,8 @@ static void check_factory_reset_button(void) {
 
 extern "C" void app_main(void) {
     ESP_LOGI(TAG, "=== Voxie Voice Assistant v%s ===", FIRMWARE_VERSION);
+    ESP_LOGW(TAG, "Reset reason: %d (1=poweron 3=sw 4=panic 5=int_wdt 6=task_wdt 8=deepsleep 9=brownout)",
+             (int)esp_reset_reason());
     ESP_LOGI(TAG, "Wake word: %s", VOXIE_WAKE_WORD);
 
     // --- 1. Initialize NVS (needed for Wi-Fi credentials, config) ---
