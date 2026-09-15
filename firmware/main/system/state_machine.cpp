@@ -42,10 +42,12 @@ static bool is_valid_transition(device_state_t from, device_state_t to) {
 
         case DEVICE_STATE_IDLE_LISTENING:
             return (to == DEVICE_STATE_STREAMING ||
-                    to == DEVICE_STATE_NOTIFYING);
+                    to == DEVICE_STATE_NOTIFYING ||
+                    to == DEVICE_STATE_PLAYING_REPLY);  // server-initiated TTS
 
         case DEVICE_STATE_STREAMING:
             return (to == DEVICE_STATE_WAITING_REPLY ||
+                    to == DEVICE_STATE_PLAYING_REPLY ||  // reply arrives mid-stream
                     to == DEVICE_STATE_IDLE_LISTENING);  // abort/timeout
 
         case DEVICE_STATE_WAITING_REPLY:
@@ -54,6 +56,7 @@ static bool is_valid_transition(device_state_t from, device_state_t to) {
 
         case DEVICE_STATE_PLAYING_REPLY:
             return (to == DEVICE_STATE_IDLE_LISTENING || // TTS done
+                    to == DEVICE_STATE_PLAYING_REPLY ||  // next sentence/clip
                     to == DEVICE_STATE_STREAMING);       // barge-in
 
         case DEVICE_STATE_NOTIFYING:
@@ -88,6 +91,13 @@ device_state_t state_machine_get_state(void) {
 bool state_machine_transition(device_state_t new_state) {
     portENTER_CRITICAL(&s_lock);
     device_state_t old_state = s_current_state;
+
+    if (old_state == new_state) {
+        // No-op: repeated notifications (e.g. several TTS "start"/"end"
+        // messages) must not spam the log or be treated as errors.
+        portEXIT_CRITICAL(&s_lock);
+        return true;
+    }
 
     if (!is_valid_transition(old_state, new_state)) {
         portEXIT_CRITICAL(&s_lock);
