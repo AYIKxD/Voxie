@@ -31,6 +31,9 @@ static void ws_event_handler(void *arg, esp_event_base_t event_base,
         case WEBSOCKET_EVENT_CONNECTED:
             ESP_LOGI(TAG, "WebSocket connected");
             s_connected = true;
+            // Recover from a stale in-flight session (e.g. the link dropped
+            // mid-turn and the disconnect event was missed).
+            xEventGroupSetBits(state_machine_get_events(), EVT_ABORT);
             // Send the hello handshake only now that the socket is actually up.
             if (s_device_id[0] != '\0') {
                 ws_protocol_send_hello(s_device_id, s_fw_version);
@@ -98,6 +101,11 @@ void ws_protocol_connect(const char *server_url) {
     ws_cfg.reconnect_timeout_ms = WS_RECONNECT_INTERVAL_MS;
     ws_cfg.network_timeout_ms = 10000;
     ws_cfg.buffer_size = 4096;
+    // Keepalive: without ping/pong a half-open connection (server restarted,
+    // Wi-Fi dropped) is never detected and the device hangs in a stale state.
+    // Ping every 10s; if no pong within 5s the client closes and reconnects.
+    ws_cfg.ping_interval_sec = 10;
+    ws_cfg.pingpong_timeout_sec = 5;
 
     s_ws_client = esp_websocket_client_init(&ws_cfg);
     if (s_ws_client == NULL) {
