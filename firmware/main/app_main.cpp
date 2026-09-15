@@ -172,6 +172,27 @@ static void main_event_task(void *arg) {
             ws_protocol_send_stream_end();
         }
 
+        if (bits & EVT_ABORT) {
+            // Server dropped or explicitly aborted the session. Without this
+            // the device can be stranded in STREAMING / WAITING_REPLY /
+            // PLAYING_REPLY forever (xiaozhi recovers to idle in
+            // OnAudioChannelClosed). Flush any in-flight audio and return
+            // to idle if currently in an active conversational state.
+            device_state_t current = state_machine_get_state();
+            if (current == DEVICE_STATE_STREAMING ||
+                current == DEVICE_STATE_WAITING_REPLY ||
+                current == DEVICE_STATE_PLAYING_REPLY ||
+                current == DEVICE_STATE_NOTIFYING) {
+                ESP_LOGW(TAG, "Abort/disconnect during %s -> returning to idle",
+                         device_state_to_str(current));
+                stream_service_flush_tts();
+                audio_service_flush_playback();
+                state_machine_transition(DEVICE_STATE_IDLE_LISTENING);
+                display_manager_set_state(DEVICE_STATE_IDLE_LISTENING);
+                led_strip_set_state(DEVICE_STATE_IDLE_LISTENING);
+            }
+        }
+
         // Update display with current state periodically
         display_manager_set_state(state_machine_get_state());
         led_strip_set_state(state_machine_get_state());

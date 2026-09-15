@@ -40,6 +40,9 @@ static void ws_event_handler(void *arg, esp_event_base_t event_base,
         case WEBSOCKET_EVENT_DISCONNECTED:
             ESP_LOGW(TAG, "WebSocket disconnected");
             s_connected = false;
+            // Wake the main event loop so it can abort any in-flight session
+            // and return the device to idle (xiaozhi OnAudioChannelClosed).
+            xEventGroupSetBits(state_machine_get_events(), EVT_ABORT);
             break;
 
         case WEBSOCKET_EVENT_DATA:
