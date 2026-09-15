@@ -69,11 +69,12 @@ static void init_i2s_speaker(void) {
     chan_cfg.dma_frame_num = DMA_BUF_LEN_SAMPLES;
     ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &s_spk_chan, NULL));
 
-    // MAX98357A: 24kHz 32-bit mono. Running at 24kHz gives FM-radio quality TTS
-    // (max freq 12kHz) vs 16kHz telephone quality (max freq 8kHz).
+    // MAX98357A is a 16-bit I2S DAC and expects a standard stereo frame
+    // (L+R per LRCK). Running at 24kHz gives FM-radio quality TTS (max 12kHz)
+    // vs 16kHz telephone quality. The 32-bit mono experiment distorted badly.
     i2s_std_config_t std_cfg = {
         .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(SPK_SAMPLE_RATE),
-        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_MONO),
+        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
         .gpio_cfg = {
             .mclk = I2S_GPIO_UNUSED,
             .bclk = SPK_I2S_SCK,
@@ -87,10 +88,9 @@ static void init_i2s_speaker(void) {
             },
         },
     };
-    std_cfg.slot_cfg.slot_mask = I2S_STD_SLOT_LEFT;
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(s_spk_chan, &std_cfg));
     ESP_ERROR_CHECK(i2s_channel_enable(s_spk_chan));
-    ESP_LOGI(TAG, "I2S speaker initialized (I2S%d)", SPK_I2S_NUM);
+    ESP_LOGI(TAG, "I2S speaker initialized (I2S%d, %d Hz, 16-bit stereo)", SPK_I2S_NUM, SPK_SAMPLE_RATE);
 }
 
 // ============================================================================
@@ -126,7 +126,8 @@ static void i2s_mic_task(void *arg) {
 /// Playback task â€” pulls PCM from the playback ring buffer and writes to I2S speaker.
 static void playback_task(void *arg) {
     // Static buffers: these are too large to keep on the task stack.
-    static int32_t dma_buf32[DMA_BUF_LEN_SAMPLES];
+    static int16_t dma_buf[DMA_BUF_LEN_SAMPLES];
+    static int16_t stereo_buf[DMA_BUF_LEN_SAMPLES * 2];
     size_t bytes_written = 0;
 
     ESP_LOGI(TAG, "Playback task started on core %d", xPortGetCoreID());
@@ -142,30 +143,32 @@ static void playback_task(void *arg) {
             int16_t *samples = (int16_t *)item;
             num_samples = item_size / sizeof(int16_t);
             
-            // Exponential volume curve scaled to 32-bit to prevent quantization noise
+            // Exponential volume curve in Q16 fixed point (no float per sample).
             double vol_normalized = (double)s_volume / 100.0;
             int32_t volume_factor = (int32_t)(vol_normalized * vol_normalized * 65536.0);
 
             for (size_t i = 0; i < num_samples; i++) {
-                int64_t temp = (int64_t)samples[i] * volume_factor;
-                if (temp > INT32_MAX) {
-                    dma_buf32[i] = INT32_MAX;
-                } else if (temp < INT32_MIN) {
-                    dma_buf32[i] = INT32_MIN;
-                } else {
-                    dma_buf32[i] = (int32_t)temp;
-                }
+                int32_t scaled = (int32_t)(((int32_t)samples[i] * volume_factor) >> 16);
+                if (scaled > INT16_MAX) scaled = INT16_MAX;
+                else if (scaled < INT16_MIN) scaled = INT16_MIN;
+                dma_buf[i] = (int16_t)scaled;
             }
             vRingbufferReturnItem(s_playback_ringbuf, item);
         } else {
             // No audio to play â€” emit silence to keep DMA/amp running cleanly
-            memset(dma_buf32, 0, sizeof(dma_buf32));
+            memset(dma_buf, 0, sizeof(dma_buf));
             num_samples = DMA_BUF_LEN_SAMPLES;
         }
 
-        i2s_channel_write(s_spk_chan, dma_buf32,
-                          num_samples * sizeof(int32_t),
-                          &bytes_written, portMAX_DELAY);
+        // MAX98357A needs a standard stereo frame: duplicate mono to L/R.
+        for (size_t i = 0; i < num_samples; i++) {
+            stereo_buf[2 * i]     = dma_buf[i];
+            stereo_buf[2 * i + 1] = dma_buf[i];
+        }
+
+        i2s_channel_write(s_spk_chan, stereo_buf,
+                          num_samples * 2 * sizeof(int16_t),
+                          &bytes_written, pdMS_TO_TICKS(100));
     }
 }
 
