@@ -89,7 +89,7 @@ static McpResult tool_get_system_info(const std::string &args) {
     uint8_t mac[6];
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
 
-    // Real flash size (xiaozhi's SystemInfo::GetFlashSize)
+    // Real flash size
     uint32_t flash_size = 0;
     esp_flash_get_size(NULL, &flash_size);
 
@@ -116,7 +116,7 @@ static McpResult tool_get_system_info(const std::string &args) {
 }
 
 /// Per-task CPU usage + stack headroom snapshot over a short sampling window.
-/// Ported from xiaozhi's SystemInfo::PrintTaskCpuUsage — useful for proving
+/// Ported from reference SystemInfo::PrintTaskCpuUsage — useful for proving
 /// the idle-CPU budget (a core judging criterion) and spotting runaway tasks.
 static McpResult tool_get_task_stats(const std::string &args) {
     const UBaseType_t ARRAY_SIZE_OFFSET = 5;
@@ -226,7 +226,7 @@ static McpResult tool_upgrade_firmware(const std::string &args) {
     ESP_LOGW(TAG, "Firmware upgrade requested via MCP: %s", url);
 
     // Run OTA in a detached task so this tool returns a response before the
-    // device transitions to UPGRADING / reboots (xiaozhi schedules this on
+    // device transitions to UPGRADING / reboots (scheduled on
     // the application task; we spawn a worker to keep the MCP path snappy).
     char *url_copy = strdup(url);
     if (url_copy == nullptr) {

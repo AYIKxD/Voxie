@@ -45,7 +45,7 @@ static void ws_event_handler(void *arg, esp_event_base_t event_base,
             ESP_LOGW(TAG, "WebSocket disconnected");
             s_connected = false;
             // Wake the main event loop so it can abort any in-flight session
-            // and return the device to idle (xiaozhi OnAudioChannelClosed).
+            // and return the device to idle when audio channel is closed.
             xEventGroupSetBits(state_machine_get_events(), EVT_ABORT);
             break;
 

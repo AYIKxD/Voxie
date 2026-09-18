@@ -10,7 +10,7 @@ extern "C" {
 
 /**
  * Settings — lightweight NVS-backed key/value store.
- * Adapted from XiaoZhi's Settings class (main/settings.h).
+ * Defines the core Settings class.
  *
  * Namespaces isolate subsystems (e.g. "voxie_audio") so keys stay short
  * and collisions between subsystems are impossible.

@@ -4,7 +4,7 @@
 
 /**
  * Binary frame header for Opus audio packets over WebSocket.
- * Adopted from XiaoZhi's BinaryProtocol2 design.
+ * Binary protocol definitions for high-performance audio transport.
  *
  * All fields are little-endian (native ESP32 byte order).
  */

@@ -66,7 +66,7 @@ static void play_tone(int freq_hz, int ms) {
 // ============================================================================
 /// Handle incoming JSON text messages from the cloud server
 static void on_ws_text_message(const char *json_str, size_t len) {
-    // Parse with cJSON (xiaozhi-style robust dispatch) instead of strstr
+    // Parse with cJSON (robust dispatch) instead of strstr
     // scanning, which breaks on servers that emit "key": "value" spacing.
     cJSON *root = cJSON_ParseWithLength(json_str, len);
     if (root == NULL) {
@@ -220,7 +220,7 @@ static void main_event_task(void *arg) {
         if (bits & EVT_ABORT) {
             // Server dropped or explicitly aborted the session. Without this
             // the device can be stranded in STREAMING / WAITING_REPLY /
-            // PLAYING_REPLY forever (xiaozhi recovers to idle in
+            // PLAYING_REPLY forever (recovers to idle in
             // OnAudioChannelClosed). Flush any in-flight audio and return
             // to idle if currently in an active conversational state.
             device_state_t current = state_machine_get_state();
@@ -297,7 +297,7 @@ static void button_task(void *arg) {
 // ============================================================================
 // Re-provisioning — hold BOOT (GPIO0) for 5 s at startup to erase the saved
 // Wi-Fi/server settings and reboot into the SoftAP setup portal.
-// Ported from xiaozhi's SystemReset (factory reset).
+// Ported SystemReset (factory reset).
 // ============================================================================
 #define WIFI_NVS_NAMESPACE "voxie_wifi"
 #define RESET_HOLD_MS      5000

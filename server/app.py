@@ -280,7 +280,7 @@ async def _process_utterance(websocket, mcp_client, encoder, history, pcm):
         # --- Stream TTS sentence-by-sentence for low latency ---------------
         # Split reply into sentence-sized chunks and synthesize + send each
         # one immediately so playback begins while later sentences are still
-        # being generated.  This is how XiaoZhi achieves near-zero perceived
+        # being generated.  This is how we achieve near-zero perceived
         # latency — the user hears the first sentence within ~200ms of the
         # LLM finishing, instead of waiting for the entire reply to synthesize.
         sentences = split_sentences(reply_text)

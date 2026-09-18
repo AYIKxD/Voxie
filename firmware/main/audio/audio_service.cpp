@@ -1,4 +1,4 @@
-﻿#include "audio_service.h"
+#include "audio_service.h"
 #include "system/config.h"
 #include "system/settings.h"
 #include "esp_log.h"
@@ -273,7 +273,7 @@ void audio_service_set_volume(int volume) {
     s_volume = volume;
     ESP_LOGI(TAG, "Volume set to %d%%", s_volume);
 
-    // Persist so the choice survives reboots (xiaozhi keeps this in NVS too)
+    // Persist so the choice survives reboots
     if (settings_open(VOLUME_SETTINGS_NS, true)) {
         settings_set_int("volume", s_volume);
         settings_close();
