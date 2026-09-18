@@ -81,7 +81,7 @@ async def _generate_gemini(history: list, tools: list):
         logger.error("GEMINI_API_KEY is not set")
         return "Gemini API key is not configured.", []
 
-    model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+    model_name = os.environ.get("GEMINI_MODEL", "gemini-3.1-flash-live")
 
     contents = []
     for m in history:
