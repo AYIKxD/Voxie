@@ -105,9 +105,9 @@ python export_tflite.py --model-dir output/ --output ../firmware/main/kws/model_
 
 | Component | Required | Purpose |
 |-----------|----------|---------|
-| ESP32-S3-DevKitC-1 (8MB flash, PSRAM) | ✅ | Main MCU |
-| ICS43434 I2S MEMS Mic (INMP441-compatible) | ✅ | Voice capture |
-| MAX98357A I2S Amplifier + Speaker | ✅ | Audio playback |
+| ESP32-S3-DevKitC-1 (8MB flash, PSRAM) | Main MCU |
+| ICS43434 I2S MEMS Mic (INMP441-compatible) | Voice capture |
+| MAX98357A I2S Amplifier + Speaker | Audio playback |
 | ST7789 1.69" LCD (240×280) | Optional | Rich UI display |
 | SSD1306 0.96" OLED | Optional | Basic status display |
 | WS2812B LED Strip (16 LEDs) | Optional | State animations |

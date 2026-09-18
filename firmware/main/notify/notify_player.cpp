@@ -23,7 +23,7 @@ void notify_player_start(const char *text) {
         return;
     }
 
-    // Only play if device is idle (matches xiaozhi: notifications are
+    // Only play if device is idle (notifications are
     // unsolicited and never interrupt an ongoing conversation).
     device_state_t state = state_machine_get_state();
     if (state != DEVICE_STATE_IDLE_LISTENING) {

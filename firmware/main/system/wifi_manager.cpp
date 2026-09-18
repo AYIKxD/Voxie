@@ -275,7 +275,7 @@ static void start_sta_connection(const char* ssid, const char* password) {
     }
 
     // Advertise a friendly DHCP hostname ("Voxie-XXXX") instead of "espressif"
-    // so the device is recognizable in the router's client list (xiaozhi
+    // so the device is recognizable in the router's client list
     // does the same in WifiBoard::StartNetwork).
     uint8_t mac[6];
     if (esp_read_mac(mac, ESP_MAC_WIFI_STA) == ESP_OK) {

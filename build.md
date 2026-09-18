@@ -24,7 +24,7 @@ LLM reply generation, TTS, speaker playback, MCP tool calls, IoT control, displa
 **not** part of the graded pipeline.
 
 However, the demo layer is what separates "technically correct" from "judges remember you a
-week later." XiaoZhi proved that an ESP32-S3 can run a full MCP server, Opus codec, LVGL
+week later." It has been proven that an ESP32-S3 can run a full MCP server, Opus codec, LVGL
 display, camera vision, and IoT control simultaneously. We adopt every one of those ideas
 that adds demo impact, while keeping the judged KWS path architecturally isolated and
 independently benchmarkable.
@@ -37,16 +37,16 @@ flag (`VOXIE_ENABLE_*`) so the judged path can be isolated for clean benchmarkin
 
 | Judged requirement | How this build satisfies it |
 |---|---|
-| Open-source only, no proprietary voice-activation SDK | KWS uses TensorFlow Lite for Microcontrollers (Apache-2.0) + Espressif's `esp-tflite-micro`/`esp-nn` (Apache-2.0/MIT) + the `microWakeWord` training framework (open source). We explicitly **do not** use Espressif's ESP-SR/Skainet (WakeNet/MultiNet) — its shipped wake-word models are closed, pre-trained binaries, which is exactly what disqualified XiaoZhi's approach. We also do not use Picovoice Porcupine or any other commercial KWS SDK. |
+| Open-source only, no proprietary voice-activation SDK | KWS uses TensorFlow Lite for Microcontrollers (Apache-2.0) + Espressif's `esp-tflite-micro`/`esp-nn` (Apache-2.0/MIT) + the `microWakeWord` training framework (open source). We explicitly **do not** use Espressif's ESP-SR/Skainet (WakeNet/MultiNet) — its shipped wake-word models are closed, pre-trained binaries, which is exactly what disqualified proprietary approaches. We also do not use Picovoice Porcupine or any other commercial KWS SDK. |
 | No pre-trained global keywords ("Hey Google", "Alexa") | We train a brand-new model from scratch on your own chosen phrase using the `microWakeWord` pipeline. We never load its pre-shipped `hey_jarvis` / `alexa` / `ok_nabu` release models — those are reference examples only. |
 | Model efficiency: RAM/flash footprint, idle CPU <10% | int8-quantized streaming model, tens of KB flash, tensor arena on the order of tens of KB RAM, run through `esp-nn`-accelerated kernels. Inference runs once per 10–20 ms audio stride on a ~40-value feature vector, not on raw audio — this is what keeps idle CPU low. Measured directly (see §10). |
 | Accuracy: high true-positive, near-zero false-accept | Handled by the `microWakeWord` training methodology: large synthetic multi-speaker dataset + heavy augmentation + explicit hard-negative mining, with a tunable detection threshold and smoothing window traded off against your measured false-accept rate (see §4 and §10). |
 | Latency: keyword-end → cloud ASR receiving audio | SNTP-synchronized clocks + a timestamp embedded in the first streamed packet, measured server-side (see §8.3). This gives you a defensible, judge-presentable number instead of a guess. |
 | Evaluated on a real low-power MCU | Everything on-device is written in ESP-IDF (C/C++) for the ESP32-S3, not emulated. |
 
-### 0.3 What we take from XiaoZhi (and what we don't)
+### 0.3 Core Architectural Elements
 
-| Adopted from XiaoZhi | Why |
+| Core Features | Why |
 |---|---|
 | **MCP Server on the MCU** | Turns the device from a dumb mic/speaker into an extensible AI agent platform. The LLM can discover and call device functions (adjust volume, control LEDs, read sensors, take photos) dynamically. This is the single most impressive demo feature. |
 | **Opus codec** instead of raw PCM streaming | ~10× bandwidth reduction (PCM 16kHz mono = 256 kbps vs Opus = 16–24 kbps). Critical for real-world Wi-Fi reliability and makes the system viable over cellular. |
@@ -58,7 +58,7 @@ flag (`VOXIE_ENABLE_*`) so the judged path can be isolated for clean benchmarkin
 | **Async voice notifications** | Cloud can push spoken alerts to an idle device without the user initiating. |
 | **Camera + vision** (stretch) | "Hey Voxie, what's on this whiteboard?" → captures photo → sends to vision LLM → speaks answer. |
 
-| **NOT** adopted from XiaoZhi | Why |
+| Excluded Features | Why |
 |---|---|
 | ESP-SR / WakeNet / MultiNet for wake words | Proprietary pre-trained models. Violates the SIH open-source requirement. This is the core differentiator of our build. |
 | MQTT + UDP hybrid transport | Over-engineered for a demo. Single WebSocket is simpler and sufficient. |
@@ -186,7 +186,7 @@ Async paths:
 ```
 
 Key difference from beta plan: KWS inference **never stops** — it runs during playback too,
-enabling natural barge-in. This is how XiaoZhi does it and users expect it.
+enabling natural barge-in. This is how users expect it to work.
 
 ### 1.3 Why this specific KWS design
 
@@ -208,9 +208,9 @@ projects use the same canonical TFLM audio front-end (the "micro_speech preproce
 model trained via `microWakeWord` is a drop-in replacement for `micro_speech`'s demo model —
 we're not reinventing feature extraction, just swapping the classifier.
 
-### 1.4 Why MCP is the killer feature (learned from XiaoZhi)
+### 1.4 Why MCP is the killer feature
 
-XiaoZhi demonstrated that an ESP32-S3 can run a full **MCP (Model Context Protocol) server**
+We demonstrate that an ESP32-S3 can run a full **MCP (Model Context Protocol) server**
 directly on the microcontroller. This transforms the device from a dumb audio pipe into an
 **AI agent platform**:
 
@@ -387,9 +387,9 @@ Adjust to match whatever you already have wired. Keep existing mic wiring if it'
 
 ## 5. Phase 2 — Opus audio codec integration
 
-### Why Opus instead of raw PCM (learned from XiaoZhi)
+### Why Opus instead of raw PCM
 
-The beta plan streamed raw PCM (16kHz × 16-bit × mono = **256 kbps**). XiaoZhi uses Opus at
+The beta plan streamed raw PCM (16kHz × 16-bit × mono = **256 kbps**). We use Opus at
 16–24 kbps — a **10×+ reduction**. This matters because:
 
 - Wi-Fi at a crowded demo venue is unreliable. Lower bitrate = fewer dropped packets.
@@ -408,7 +408,7 @@ The beta plan streamed raw PCM (16kHz × 16-bit × mono = **256 kbps**). XiaoZhi
    - Channels: 1 (mono)
    - Application: `OPUS_APPLICATION_VOIP`
    - Bitrate: 16000–24000 bps
-   - Frame size: 960 samples (60ms) — matches XiaoZhi's default, good latency/efficiency tradeoff
+   - Frame size: 960 samples (60ms) — good latency/efficiency tradeoff
    - Complexity: 0–3 (lower = less CPU, fine for speech)
 
 3. **Decoder settings** (server → device, TTS playback):
@@ -701,7 +701,7 @@ packed header).
 
 ### 8.2 Binary frame format
 
-Adopt XiaoZhi's packed binary header for audio frames (timestamps enable server-side latency
+Adopt a packed binary header for audio frames (timestamps enable server-side latency
 measurement and potential AEC alignment):
 
 ```c
@@ -912,8 +912,7 @@ the judged metrics.
 - `SYSTRAN/faster-whisper` — ASR engine.
   https://github.com/SYSTRAN/faster-whisper
 - `collabora/WhisperLive` — reference real-time whisper WebSocket server.
-- `xiaozhi-esp32` (X:\Voxie\xiaozhi) — reference for MCP server implementation on ESP32-S3,
-  Opus integration, LVGL display, IoT tool registration patterns, binary protocol framing.
+
 - `xiph/opus` — Opus codec reference implementation.
   https://github.com/xiph/opus
 - `snakers4/silero-vad` — Silero VAD for server-side end-pointing.
@@ -935,16 +934,16 @@ Key concepts implemented in Voxie:
 - **Capability Negotiation**: `initialize` exchange at session start establishes protocol
   version and supported features.
 
-## Appendix C: Key architectural decisions vs. XiaoZhi
+## Appendix C: Key architectural decisions vs. Alternatives
 
-| Decision | XiaoZhi's approach | Voxie's approach | Rationale |
+| Decision | Alternative approach | Voxie's approach | Rationale |
 |---|---|---|---|
-| Wake word engine | ESP-SR WakeNet (proprietary pre-trained) | microWakeWord + TFLite Micro (open-source, custom-trained) | SIH compliance: must be open-source, custom phrase |
-| Audio codec | Opus (mandatory) | Opus (adopted) | 10× bandwidth savings, better reliability |
+| Wake word engine | Proprietary pre-trained SDKs | microWakeWord + TFLite Micro (open-source, custom-trained) | SIH compliance: must be open-source, custom phrase |
+| Audio codec | Raw PCM | Opus | 10× bandwidth savings, better reliability |
 | Transport | WebSocket + MQTT/UDP hybrid | WebSocket only | Simpler, sufficient for Wi-Fi demo |
-| MCP server | Full implementation | Full implementation (adopted) | Killer feature, extensible, standard protocol |
-| Display | LVGL with 17+ LCD drivers | LVGL with ST7789 + SSD1306 fallback | We target one board, not 138 |
-| Board abstraction | 138 boards, massive HAL | Single board config, minimal HAL | Premature abstraction wastes time for a competition |
+| MCP server | Basic JSON-RPC | Full MCP implementation | Killer feature, extensible, standard protocol |
+| Display | LVGL with dozens of LCD drivers | LVGL with ST7789 + SSD1306 fallback | We target one board |
+| Board abstraction | Massive HAL for many boards | Single board config, minimal HAL | Premature abstraction wastes time for a competition |
 | Multi-language | 40 locales | English only (add more if time permits) | Demo is in English |
 | Glyph push | Dynamic font streaming | Baked font with good coverage | Simpler, reliable, sufficient |
 | Network types | Wi-Fi, 4G, Ethernet, USB | Wi-Fi only | Demo venue has Wi-Fi |

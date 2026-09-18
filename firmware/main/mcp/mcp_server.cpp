@@ -16,7 +16,7 @@ static const char *TAG = "mcp_srv";
 static std::vector<McpTool> s_tools;
 
 // ============================================================================
-// cJSON helpers (xiaozhi-style: build responses with cJSON, own the memory)
+// cJSON helpers: build responses with cJSON, own the memory
 // ============================================================================
 
 struct CJsonDeleter {
