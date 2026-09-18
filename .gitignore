@@ -38,3 +38,4 @@ Thumbs.db
 
 # Reference project (not part of Voxie)
 xiaozhi/
+.env
