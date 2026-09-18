@@ -12,9 +12,10 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from mcp_client import McpClient
 from opus_utils import OpusStreamDecoder, OpusStreamEncoder
-from asr import transcribe
-from llm import generate_reply
-from tts import synthesize, split_sentences
+from llm import _tools_to_gemini
+
+from google import genai
+from google.genai import types
 
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -143,77 +144,140 @@ async def websocket_endpoint(websocket: WebSocket):
     global active_mcp
     mcp_client = McpClient()
     active_mcp = mcp_client
-    # The device encodes mic audio (OPUS mic frames) at 16 kHz; the TTS
-    # encoder/decoder run at 24 kHz. Decoding mic Opus at the wrong rate
-    # produces audio that Whisper then misreads as garbage.
     decoder = OpusStreamDecoder(sample_rate=16000)
     encoder = OpusStreamEncoder()
-    history = []
 
-    pcm_buffer = bytearray()
     in_stream = False
     hello_received = asyncio.Event()
-    utterances: asyncio.Queue = asyncio.Queue()
-
-    async def receiver():
-        nonlocal in_stream
-        while True:
-            msg = await websocket.receive()
-            if msg.get("type") == "websocket.disconnect":
-                break
-
-            if msg.get("text") is not None:
-                try:
-                    data = json.loads(msg["text"])
-                except json.JSONDecodeError:
-                    continue
-                mtype = data.get("type")
-                if mtype == "hello":
-                    logger.info(f"Device hello: {msg['text']}")
-                    hello_received.set()
-                elif mtype == "stream_start":
-                    pcm_buffer.clear()
-                    decoder.reset()
-                    in_stream = True
-                    logger.info(f"Stream start (wake_ts_us={data.get('wake_ts_us')})")
-                elif mtype == "stream_end":
-                    in_stream = False
-                    pcm = bytes(pcm_buffer)
-                    pcm_buffer.clear()
-                    logger.info(f"Stream end ({len(pcm)} PCM bytes)")
-                    utterances.put_nowait(pcm)
-                elif mtype == "abort":
-                    logger.info("Abort requested (barge-in)")
-                elif mtype == "mcp":
-                    mcp_client.handle_message(data)
-
-            elif msg.get("bytes") is not None:
-                raw = msg["bytes"]
-                if in_stream and len(raw) > BINARY_HEADER.size:
-                    version, ftype, _ts, _size = BINARY_HEADER.unpack_from(raw, 0)
-                    if version == 1 and ftype == BINARY_TYPE_MIC:
-                        pcm = decoder.decode(raw[BINARY_HEADER.size:])
-                        if pcm:
-                            pcm_buffer.extend(pcm)
-
-    recv_task = asyncio.create_task(receiver())
 
     try:
         await websocket.send_text(json.dumps({"type": "hello"}))
         await asyncio.wait_for(hello_received.wait(), timeout=10)
 
         # Give the device a moment to finish registering all its tools
-        # (IoT tools register after built-in tools on the device side).
         await asyncio.sleep(0.3)
 
         await mcp_client.initialize(websocket)
         tools = await mcp_client.list_tools(websocket, retries=3)
         logger.info(f"Cached {len(tools)} MCP tools from device")
 
-        while True:
-            pcm = await utterances.get()
-            asyncio.create_task(
-                _process_utterance(websocket, mcp_client, encoder, history, pcm))
+        gemini_tools = _tools_to_gemini(mcp_client.tools)
+
+        import os
+        api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        client = genai.Client(api_key=api_key)
+
+        config = types.LiveConnectConfig(
+            response_modalities=[types.LiveClientContentModality.AUDIO],
+            system_instruction=types.Content(parts=[types.Part.from_text(
+                "You are Voxie, a concise and helpful voice assistant running on an ESP32-S3 device. "
+                "Keep spoken replies short (1-3 sentences). When the user asks you to control the device, call the appropriate tool."
+            )]),
+            tools=gemini_tools if gemini_tools else None,
+        )
+
+        audio_queue = asyncio.Queue()
+
+        async def receiver():
+            nonlocal in_stream
+            while True:
+                msg = await websocket.receive()
+                if msg.get("type") == "websocket.disconnect":
+                    audio_queue.put_nowait(None)
+                    break
+
+                if msg.get("text") is not None:
+                    try:
+                        data = json.loads(msg["text"])
+                    except json.JSONDecodeError:
+                        continue
+                    mtype = data.get("type")
+                    if mtype == "hello":
+                        hello_received.set()
+                    elif mtype == "stream_start":
+                        decoder.reset()
+                        in_stream = True
+                        logger.info("Mic stream start")
+                    elif mtype == "stream_end":
+                        in_stream = False
+                        logger.info("Mic stream end")
+                    elif mtype == "mcp":
+                        mcp_client.handle_message(data)
+
+                elif msg.get("bytes") is not None:
+                    raw = msg["bytes"]
+                    if in_stream and len(raw) > BINARY_HEADER.size:
+                        version, ftype, _ts, _size = BINARY_HEADER.unpack_from(raw, 0)
+                        if version == 1 and ftype == BINARY_TYPE_MIC:
+                            pcm = decoder.decode(raw[BINARY_HEADER.size:])
+                            if pcm:
+                                audio_queue.put_nowait(pcm)
+
+        recv_task = asyncio.create_task(receiver())
+
+        async with client.aio.live.connect(model="gemini-3.1-flash-live", config=config) as session:
+            logger.info("Connected to Gemini Live API")
+
+            async def send_to_gemini():
+                while True:
+                    pcm = await audio_queue.get()
+                    if pcm is None:
+                        break
+                    
+                    await session.send(input=types.LiveClientRealtimeInput(
+                        media_chunks=[types.Blob(
+                            data=pcm, 
+                            mime_type="audio/pcm;rate=16000"
+                        )]
+                    ))
+
+            async def receive_from_gemini():
+                async for response in session.receive():
+                    server_content = response.server_content
+                    if server_content:
+                        model_turn = server_content.model_turn
+                        if model_turn:
+                            for part in model_turn.parts:
+                                if part.inline_data:
+                                    out_pcm = part.inline_data.data
+                                    # Tell device TTS is starting if we want to trigger display state, 
+                                    # but we can just stream frames directly.
+                                    await stream_tts(websocket, encoder, out_pcm)
+
+                    if response.tool_call:
+                        for fc in response.tool_call.function_calls:
+                            logger.info(f"Gemini Live Tool call: {fc.name}")
+                            args = fc.args if hasattr(fc, "args") else {}
+                            if not isinstance(args, dict):
+                                try:
+                                    args = dict(args)
+                                except:
+                                    args = {}
+                                    
+                            result = await mcp_client.call_tool(websocket, fc.name, args)
+                            logger.info(f"Tool result: {result}")
+                            
+                            # Ensure result is a dictionary or appropriate JSON object
+                            if not isinstance(result, dict):
+                                result = {"result": result}
+                                
+                            await session.send(input=types.LiveClientToolResponse(
+                                function_responses=[types.FunctionResponse(
+                                    id=fc.id,
+                                    name=fc.name,
+                                    response=result
+                                )]
+                            ))
+
+            send_task = asyncio.create_task(send_to_gemini())
+            receive_task = asyncio.create_task(receive_from_gemini())
+
+            done, pending = await asyncio.wait(
+                [recv_task, send_task, receive_task],
+                return_when=asyncio.FIRST_COMPLETED
+            )
+            for t in pending:
+                t.cancel()
 
     except asyncio.TimeoutError:
         logger.warning("Timed out waiting for device hello")
@@ -222,81 +286,6 @@ async def websocket_endpoint(websocket: WebSocket):
     except Exception as e:
         logger.exception(f"Error in websocket loop: {e}")
     finally:
-        recv_task.cancel()
         if active_ws is websocket:
             active_ws = None
-
-
-async def _process_utterance(websocket, mcp_client, encoder, history, pcm):
-    try:
-        # Debug: keep the most recent utterance for inspection.
-        try:
-            import wave as _wave
-            with _wave.open("/root/.cache/voxie_last_utterance.wav", "wb") as wf:
-                wf.setnchannels(1)
-                wf.setsampwidth(2)
-                wf.setframerate(16000)
-                wf.writeframes(pcm)
-        except Exception:
-            pass
-
-        transcript = transcribe(pcm, 16000)
-        logger.info(f"Transcript: {transcript!r}")
-        if not transcript:
-            return
-
-        await websocket.send_text(json.dumps({"type": "stt", "text": transcript}))
-        history.append({"role": "user", "content": transcript})
-
-        # Lazily re-fetch tools if the cache is empty (e.g. initial fetch
-        # timed out).  This is the safety net that prevents "0 tools" from
-        # persisting for the entire session.
-        await mcp_client.ensure_tools(websocket)
-
-        reply_text = ""
-        for _round in range(MAX_TOOL_ROUNDS):
-            reply_text, tool_calls = await generate_reply(history, mcp_client.tools)
-            if not tool_calls:
-                break
-            for call in tool_calls:
-                logger.info(f"Tool call: {call['name']} {call['arguments']}")
-                result = await mcp_client.call_tool(
-                    websocket, call["name"], call["arguments"])
-                logger.info(f"Tool result: {result}")
-                history.append({
-                    "role": "user",
-                    "content": f"[tool {call['name']} returned] {json.dumps(result)}",
-                })
-            reply_text = ""
-
-        if not reply_text:
-            reply_text, _ = await generate_reply(history, mcp_client.tools)
-        if not reply_text:
-            reply_text = "Sorry, I didn't catch that."
-
-        history.append({"role": "assistant", "content": reply_text})
-        logger.info(f"Reply: {reply_text!r}")
-
-        # --- Stream TTS sentence-by-sentence for low latency ---------------
-        # Split reply into sentence-sized chunks and synthesize + send each
-        # one immediately so playback begins while later sentences are still
-        # being generated.  This is how XiaoZhi achieves near-zero perceived
-        # latency — the user hears the first sentence within ~200ms of the
-        # LLM finishing, instead of waiting for the entire reply to synthesize.
-        sentences = split_sentences(reply_text)
-        if not sentences:
-            sentences = [reply_text]
-
-        await websocket.send_text(json.dumps(
-            {"type": "tts", "state": "start", "text": reply_text}))
-
-        for sentence in sentences:
-            pcm_tts = await asyncio.to_thread(synthesize, sentence)
-            if pcm_tts:
-                await stream_tts(websocket, encoder, pcm_tts)
-
-        await websocket.send_text(json.dumps({"type": "tts", "state": "end"}))
-
-    except Exception as e:
-        logger.exception(f"Utterance processing failed: {e}")
 
