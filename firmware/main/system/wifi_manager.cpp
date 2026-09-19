@@ -96,15 +96,21 @@ static esp_err_t scan_handler(httpd_req_t *req) {
     uint16_t ap_count = 0;
     esp_wifi_scan_get_ap_num(&ap_count);
     
-    wifi_ap_record_t *ap_info = (wifi_ap_record_t *)malloc(sizeof(wifi_ap_record_t) * ap_count);
-    ESP_ERROR_CHECK(esp_wifi_scan_get_ap_records(&ap_count, ap_info));
-    
     cJSON *root = cJSON_CreateArray();
-    for (int i = 0; i < ap_count; i++) {
-        cJSON *item = cJSON_CreateObject();
-        cJSON_AddStringToObject(item, "ssid", (const char*)ap_info[i].ssid);
-        cJSON_AddNumberToObject(item, "rssi", ap_info[i].rssi);
-        cJSON_AddItemToArray(root, item);
+    
+    if (ap_count > 0) {
+        wifi_ap_record_t *ap_info = (wifi_ap_record_t *)malloc(sizeof(wifi_ap_record_t) * ap_count);
+        if (ap_info) {
+            if (esp_wifi_scan_get_ap_records(&ap_count, ap_info) == ESP_OK) {
+                for (int i = 0; i < ap_count; i++) {
+                    cJSON *item = cJSON_CreateObject();
+                    cJSON_AddStringToObject(item, "ssid", (const char*)ap_info[i].ssid);
+                    cJSON_AddNumberToObject(item, "rssi", ap_info[i].rssi);
+                    cJSON_AddItemToArray(root, item);
+                }
+            }
+            free(ap_info);
+        }
     }
     
     const char *json_resp = cJSON_PrintUnformatted(root);
@@ -113,7 +119,6 @@ static esp_err_t scan_handler(httpd_req_t *req) {
     
     free((void *)json_resp);
     cJSON_Delete(root);
-    free(ap_info);
     
     return ESP_OK;
 }
