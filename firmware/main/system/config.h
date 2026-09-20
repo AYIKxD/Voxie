@@ -112,11 +112,11 @@
 #define KWS_FEATURE_SIZE         40
 #define KWS_STREAMING_SLICES     3    // microWakeWord streaming input window
 #define KWS_AVG_WINDOW           5    // moving-average window over frame probabilities
-#define KWS_DETECTION_THRESHOLD  0.75f
+#define KWS_DETECTION_THRESHOLD  0.95f
 #define KWS_SMOOTHING_WINDOW     4    // consecutive averaged frames above threshold to trigger
 
 // --- Network ---
-#define WS_RECONNECT_INTERVAL_MS 5000
+#define WS_RECONNECT_INTERVAL_MS 2000
 #define SNTP_SERVER              "pool.ntp.org"
 #define SOFTAP_SSID_PREFIX       "Voxie"
 

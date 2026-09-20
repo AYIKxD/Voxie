@@ -18,4 +18,5 @@ typedef struct __attribute__((packed)) {
 #define BINARY_PROTO_VERSION        1
 #define BINARY_TYPE_MIC_AUDIO       0
 #define BINARY_TYPE_TTS_AUDIO       1
+#define BINARY_TYPE_MIC_PCM         2
 #define BINARY_HEADER_SIZE          sizeof(binary_frame_header_t)  // 12 bytes

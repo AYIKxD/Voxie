@@ -36,6 +36,6 @@ Thumbs.db
 # Backup
 *.bak
 
-# Reference project (not part of Voxie)
-xiaozhi/
 .env
+*.cache/
+/firmware/.cache/

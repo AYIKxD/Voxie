@@ -32,6 +32,7 @@ static bool s_is_connected = false;
 static esp_netif_t *s_sta_netif = NULL;
 static esp_netif_t *s_ap_netif = NULL;
 static httpd_handle_t s_http_server = NULL;
+static bool s_provisioning = false;
 
 static void start_softap_provisioning(void);
 static void start_sta_connection(const char* ssid, const char* password);
@@ -198,6 +199,10 @@ static const httpd_uri_t uri_post_connect = {
 };
 
 static void start_webserver(void) {
+    if (s_http_server != NULL) {
+        return;
+    }
+    
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.max_uri_handlers = 8;
     
@@ -222,7 +227,9 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
             ESP_LOGI(TAG, "Retrying connection to the AP...");
         } else {
             ESP_LOGE(TAG, "Failed to connect to AP after retries");
-            start_softap_provisioning();
+            if (!s_provisioning) {
+                start_softap_provisioning();
+            }
         }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
@@ -241,6 +248,9 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
 }
 
 static void start_softap_provisioning(void) {
+    if (s_provisioning) return;
+    s_provisioning = true;
+    
     ESP_LOGI(TAG, "Starting SoftAP Provisioning Mode");
     state_machine_transition(DEVICE_STATE_UNPROVISIONED);
     
@@ -262,7 +272,11 @@ static void start_softap_provisioning(void) {
         s_ap_netif = esp_netif_create_default_wifi_ap();
     }
     
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+    if (s_sta_netif == NULL) {
+        s_sta_netif = esp_netif_create_default_wifi_sta();
+    }
+    
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
     

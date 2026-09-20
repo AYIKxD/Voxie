@@ -24,8 +24,8 @@ static const char *TAG = "stream_svc";
 #define OPUS_FRAME_SAMPLES    (MIC_SAMPLE_RATE * OPUS_FRAME_DURATION_MS / 1000)  // 960 @ 16kHz mic
 #define TTS_FRAME_SAMPLES     (SPK_SAMPLE_RATE * OPUS_FRAME_DURATION_MS / 1000)  // 1440 @ 24kHz spk
 #define MAX_TTS_FRAME_SAMPLES (TTS_FRAME_SAMPLES * 2)
-#define VAD_RMS_THRESHOLD     600.0f
-#define VAD_SILENCE_END_MS    1000
+#define VAD_RMS_THRESHOLD     2500.0f
+#define VAD_SILENCE_END_MS    800
 #define MAX_STREAM_MS         20000
 
 typedef struct {
@@ -44,6 +44,7 @@ static volatile bool s_active = false;
 static volatile bool s_just_started = false;
 static volatile bool s_flush_tts_req = false;
 static bool s_speech_seen = false;
+static float s_noise_floor_rms = 0.0f;
 static uint32_t s_silence_ms = 0;
 static int64_t s_stream_start_us = 0;
 
@@ -57,27 +58,20 @@ static size_t s_enc_fill = 0;
 // Opus encode helpers (upstream path)
 // ---------------------------------------------------------------------------
 
-static void send_opus_frame(void) {
-    if (s_enc == NULL) return;
-
-    uint8_t payload[1500];
-    int n = opus_encode(s_enc, s_enc_acc, OPUS_FRAME_SAMPLES, payload,
-                        sizeof(payload));
-    if (n <= 0) {
-        ESP_LOGW(TAG, "opus_encode failed: %d", n);
-        return;
-    }
-
-    uint8_t frame[BINARY_HEADER_SIZE + sizeof(payload)];
+static void send_pcm_frame(void) {
+    size_t payload_size = OPUS_FRAME_SAMPLES * sizeof(int16_t);
+    uint8_t frame[BINARY_HEADER_SIZE + payload_size];
+    
     binary_frame_header_t hdr;
     hdr.version = BINARY_PROTO_VERSION;
-    hdr.type = BINARY_TYPE_MIC_AUDIO;
+    hdr.type = BINARY_TYPE_MIC_PCM;
     hdr.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
-    hdr.payload_size = (uint32_t)n;
+    hdr.payload_size = (uint32_t)payload_size;
+    
     memcpy(frame, &hdr, BINARY_HEADER_SIZE);
-    memcpy(frame + BINARY_HEADER_SIZE, payload, n);
-
-    ws_protocol_send_binary(frame, BINARY_HEADER_SIZE + n);
+    memcpy(frame + BINARY_HEADER_SIZE, s_enc_acc, payload_size);
+    
+    ws_protocol_send_binary(frame, BINARY_HEADER_SIZE + payload_size);
 }
 
 static void encode_acc_push(const int16_t *pcm, size_t count) {
@@ -89,7 +83,7 @@ static void encode_acc_push(const int16_t *pcm, size_t count) {
         s_enc_fill += take;
         off += take;
         if (s_enc_fill == OPUS_FRAME_SAMPLES) {
-            send_opus_frame();
+            send_pcm_frame();
             s_enc_fill = 0;
         }
     }
@@ -100,7 +94,7 @@ static void flush_pre_roll(void) {
     for (size_t i = 0; i < PRE_ROLL_SAMPLES; i++) {
         s_enc_acc[s_enc_fill++] = s_pre_roll[(start + i) % PRE_ROLL_SAMPLES];
         if (s_enc_fill == OPUS_FRAME_SAMPLES) {
-            send_opus_frame();
+            send_pcm_frame();
             s_enc_fill = 0;
         }
     }
@@ -131,7 +125,25 @@ static void stream_task(void *arg) {
             s_pre_roll_pos++;
         }
 
+        // Calculate RMS of the current chunk
+        float energy = 0.0f;
+        for (size_t i = 0; i < count; i++) {
+            float v = (float)chunk[i];
+            energy += v * v;
+        }
+        float rms = sqrtf(energy / (count > 0 ? count : 1));
+
         if (!s_active) {
+            // Update background noise floor (Peak-tracking EMA) while idle
+            if (s_noise_floor_rms == 0.0f) {
+                s_noise_floor_rms = rms;
+            } else if (rms > s_noise_floor_rms) {
+                // Fast attack for noise spikes
+                s_noise_floor_rms = rms;
+            } else {
+                // Slow decay
+                s_noise_floor_rms = 0.99f * s_noise_floor_rms + 0.01f * rms;
+            }
             continue;
         }
 
@@ -142,20 +154,27 @@ static void stream_task(void *arg) {
             encode_acc_push(chunk, count);
         }
 
-        // Simple energy VAD to end the utterance.
-        float energy = 0.0f;
-        for (size_t i = 0; i < count; i++) {
-            float v = (float)chunk[i];
-            energy += v * v;
+        // Dynamic VAD threshold: peak noise floor + margin (with a minimum safe limit)
+        float dynamic_threshold = s_noise_floor_rms + 500.0f;
+        if (dynamic_threshold < 1500.0f) {
+            dynamic_threshold = 1500.0f;
         }
-        float rms = sqrtf(energy / (count > 0 ? count : 1));
-        if (rms > VAD_RMS_THRESHOLD) {
+
+        if (rms > dynamic_threshold) {
             s_speech_seen = true;
             s_silence_ms = 0;
-        } else if (s_speech_seen) {
+        } else {
             s_silence_ms += (uint32_t)(count * 1000 / MIC_SAMPLE_RATE);
-            if (s_silence_ms >= VAD_SILENCE_END_MS) {
-                stream_service_stop();
+            if (s_speech_seen) {
+                // If they spoke and then stopped
+                if (s_silence_ms >= VAD_SILENCE_END_MS) {
+                    stream_service_stop();
+                }
+            } else {
+                // If they triggered the wake word but never spoke anything
+                if (s_silence_ms >= 4000) {
+                    stream_service_stop();
+                }
             }
         }
 
@@ -204,14 +223,10 @@ void stream_service_init(void) {
     }
 
     int err = OPUS_OK;
-    s_enc = opus_encoder_create(MIC_SAMPLE_RATE, 1, OPUS_APPLICATION_VOIP, &err);
-    if (err != OPUS_OK || s_enc == NULL) {
-        ESP_LOGE(TAG, "opus_encoder_create failed: %d", err);
-        s_enc = NULL;
-    } else {
-        opus_encoder_ctl(s_enc, OPUS_SET_BITRATE(OPUS_BITRATE));
-        opus_encoder_ctl(s_enc, OPUS_SET_COMPLEXITY(OPUS_COMPLEXITY));
-    }
+
+    // Disabled Opus encoder on ESP32 to reduce CPU usage. 
+    // Sending raw PCM directly to server instead.
+    s_enc = NULL;
 
     s_dec = opus_decoder_create(SPK_SAMPLE_RATE, 1, &err);
     if (err != OPUS_OK || s_dec == NULL) {
@@ -257,7 +272,7 @@ void stream_service_stop(void) {
     if (s_enc_fill > 0) {
         memset(s_enc_acc + s_enc_fill, 0,
                (OPUS_FRAME_SAMPLES - s_enc_fill) * sizeof(int16_t));
-        send_opus_frame();
+        send_pcm_frame();
         s_enc_fill = 0;
     }
 

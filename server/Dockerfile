@@ -11,16 +11,7 @@ WORKDIR /app
 
 COPY requirements.txt .
 
-# CPU-only PyTorch (needed by Silero VAD). Installing from the CPU index avoids
-# pulling the multi-GB CUDA runtime packages from PyPI.
-RUN pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Piper voice model (the `piper-tts` pip wheel is installed via requirements.txt)
-RUN mkdir -p /app/voices \
-    && wget -qO /app/voices/en_US-lessac-medium.onnx https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx \
-    && wget -qO /app/voices/en_US-lessac-medium.onnx.json https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json
 
 # Copy server code
 COPY . .

@@ -26,13 +26,14 @@ app = FastAPI()
 BINARY_HEADER = struct.Struct("<HHII")  # version, type, timestamp_ms, payload_size
 BINARY_TYPE_MIC = 0
 BINARY_TYPE_TTS = 1
+BINARY_TYPE_MIC_PCM = 2
 MAX_TOOL_ROUNDS = 3
 
 # Opus TTS frame duration and send pacing. The device buffers a bounded amount
 # of audio, so blasting a whole reply at once overflows it. Send slightly
 # faster than real-time so a small jitter buffer builds on the device.
 OPUS_FRAME_MS = 60
-TTS_PACE_S = (OPUS_FRAME_MS / 1000.0) * 0.8
+TTS_PACE_S = (OPUS_FRAME_MS / 1000.0) * 0.98
 
 
 async def stream_tts(ws, encoder: OpusStreamEncoder, pcm: bytes):
@@ -151,31 +152,6 @@ async def websocket_endpoint(websocket: WebSocket):
     hello_received = asyncio.Event()
 
     try:
-        await websocket.send_text(json.dumps({"type": "hello"}))
-        await asyncio.wait_for(hello_received.wait(), timeout=10)
-
-        # Give the device a moment to finish registering all its tools
-        await asyncio.sleep(0.3)
-
-        await mcp_client.initialize(websocket)
-        tools = await mcp_client.list_tools(websocket, retries=3)
-        logger.info(f"Cached {len(tools)} MCP tools from device")
-
-        gemini_tools = _tools_to_gemini(mcp_client.tools)
-
-        import os
-        api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-        client = genai.Client(api_key=api_key)
-
-        config = types.LiveConnectConfig(
-            response_modalities=[types.LiveClientContentModality.AUDIO],
-            system_instruction=types.Content(parts=[types.Part.from_text(
-                "You are Voxie, a concise and helpful voice assistant running on an ESP32-S3 device. "
-                "Keep spoken replies short (1-3 sentences). When the user asks you to control the device, call the appropriate tool."
-            )]),
-            tools=gemini_tools if gemini_tools else None,
-        )
-
         audio_queue = asyncio.Queue()
 
         async def receiver():
@@ -201,6 +177,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     elif mtype == "stream_end":
                         in_stream = False
                         logger.info("Mic stream end")
+                        audio_queue.put_nowait(b"END_OF_TURN")
                     elif mtype == "mcp":
                         mcp_client.handle_message(data)
 
@@ -208,76 +185,197 @@ async def websocket_endpoint(websocket: WebSocket):
                     raw = msg["bytes"]
                     if in_stream and len(raw) > BINARY_HEADER.size:
                         version, ftype, _ts, _size = BINARY_HEADER.unpack_from(raw, 0)
-                        if version == 1 and ftype == BINARY_TYPE_MIC:
-                            pcm = decoder.decode(raw[BINARY_HEADER.size:])
-                            if pcm:
-                                audio_queue.put_nowait(pcm)
+                        if version == 1:
+                            if ftype == BINARY_TYPE_MIC:
+                                pcm = decoder.decode(raw[BINARY_HEADER.size:])
+                                if pcm:
+                                    audio_queue.put_nowait(pcm)
+                            elif ftype == BINARY_TYPE_MIC_PCM:
+                                pcm_bytes = raw[BINARY_HEADER.size:]
+                                audio_queue.put_nowait(pcm_bytes)
+                                # DEBUG: write to file to check audio quality
+                                with open("debug_mic.pcm", "ab") as f:
+                                    f.write(pcm_bytes)
 
         recv_task = asyncio.create_task(receiver())
 
-        async with client.aio.live.connect(model="gemini-3.1-flash-live", config=config) as session:
-            logger.info("Connected to Gemini Live API")
+        await websocket.send_text(json.dumps({"type": "hello"}))
+        await asyncio.wait_for(hello_received.wait(), timeout=10)
 
-            async def send_to_gemini():
-                while True:
+        # Give the device a moment to finish registering all its tools
+        await asyncio.sleep(0.3)
+
+        await mcp_client.initialize(websocket)
+        tools = await mcp_client.list_tools(websocket, retries=3)
+        logger.info(f"Cached {len(tools)} MCP tools from device")
+
+        gemini_tools = _tools_to_gemini(mcp_client.tools)
+
+        import os
+        api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        client = genai.Client(api_key=api_key)
+
+        config = types.LiveConnectConfig(
+            response_modalities=["AUDIO"],
+            system_instruction=types.Content(parts=[types.Part.from_text(text=(
+                "You are Voxie, a conversational AI assistant running on an ESP32 device. "
+                "Keep your answers short and concise. Do NOT call tools automatically unless the user explicitly asks you to control the device's hardware, like changing volume or LEDs. "
+                "CRITICAL: Whenever you execute ANY tool or command (like setting the volume, changing LEDs, etc.), you MUST provide a short verbal confirmation to the user in your response (e.g., 'I have set the volume to 80%')."
+            ))]),
+            tools=gemini_tools if gemini_tools else None,
+        )
+
+        gemini_model = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash-exp")
+        
+        # We need to communicate between the receive/send tasks and the Gemini session
+        gemini_session = None
+        gemini_session_lock = asyncio.Lock()
+        
+        async def manage_gemini_connection():
+            nonlocal gemini_session
+            while True:
+                try:
+                    async with client.aio.live.connect(model=gemini_model, config=config) as session:
+                        logger.info("Connected to Gemini Live API")
+                        async with gemini_session_lock:
+                            gemini_session = session
+                        
+                        is_speaking = False
+                        
+                        tts_queue = asyncio.Queue()
+
+                        async def tts_worker():
+                            nonlocal is_speaking
+                            while True:
+                                try:
+                                    out_pcm = await tts_queue.get()
+                                    if out_pcm == b"END_OF_TURN":
+                                        if is_speaking:
+                                            await websocket.send_text(json.dumps({"type": "tts", "state": "end"}))
+                                            is_speaking = False
+                                    else:
+                                        if not is_speaking:
+                                            await websocket.send_text(json.dumps({"type": "tts", "state": "start", "text": ""}))
+                                            is_speaking = True
+                                        await stream_tts(websocket, encoder, out_pcm)
+                                except Exception as e:
+                                    logger.error(f"Error in TTS worker: {e}")
+
+                        tts_task = asyncio.create_task(tts_worker())
+
+                        try:
+                            async for response in session.receive():
+                                server_content = response.server_content
+                                if server_content:
+                                    model_turn = server_content.model_turn
+                                    if model_turn:
+                                        for part in model_turn.parts:
+                                            if part.text:
+                                                logger.info(f"Gemini Text: {part.text}")
+                                            if part.inline_data:
+                                                logger.info(f"Gemini Audio chunk: {len(part.inline_data.data)} bytes")
+                                                tts_queue.put_nowait(part.inline_data.data)
+                                    
+                                    if server_content.turn_complete:
+                                        tts_queue.put_nowait(b"END_OF_TURN")
+
+                                if response.tool_call:
+                                    for fc in response.tool_call.function_calls:
+                                        logger.info(f"Gemini Live Tool call: {fc.name}")
+                                        args = fc.args if hasattr(fc, "args") else {}
+                                        if not isinstance(args, dict):
+                                            try:
+                                                args = dict(args)
+                                            except:
+                                                args = {}
+                                                
+                                        result = await mcp_client.call_tool(websocket, fc.name, args)
+                                        logger.info(f"Tool result: {result}")
+                                        
+                                        if not isinstance(result, dict):
+                                            result = {"result": result}
+                                            
+                                        await session.send(input=types.LiveClientToolResponse(
+                                            function_responses=[types.FunctionResponse(
+                                                id=fc.id,
+                                                name=fc.name,
+                                                response=result
+                                            )]
+                                        ))
+                        except Exception as e:
+                            logger.error(f"Gemini session error: {e}")
+                        finally:
+                            tts_task.cancel()
+                            async with gemini_session_lock:
+                                gemini_session = None
+                            logger.warning("Gemini session closed, reconnecting in 2s...")
+                            await asyncio.sleep(2)
+                except Exception as e:
+                    logger.error(f"Failed to connect to Gemini: {e}")
+                    await asyncio.sleep(5)
+
+        async def send_to_gemini():
+            buffer = bytearray()
+            while True:
+                try:
                     pcm = await audio_queue.get()
                     if pcm is None:
                         break
                     
-                    await session.send(input=types.LiveClientRealtimeInput(
-                        media_chunks=[types.Blob(
-                            data=pcm, 
-                            mime_type="audio/pcm;rate=16000"
-                        )]
-                    ))
-
-            async def receive_from_gemini():
-                async for response in session.receive():
-                    server_content = response.server_content
-                    if server_content:
-                        model_turn = server_content.model_turn
-                        if model_turn:
-                            for part in model_turn.parts:
-                                if part.inline_data:
-                                    out_pcm = part.inline_data.data
-                                    # Tell device TTS is starting if we want to trigger display state, 
-                                    # but we can just stream frames directly.
-                                    await stream_tts(websocket, encoder, out_pcm)
-
-                    if response.tool_call:
-                        for fc in response.tool_call.function_calls:
-                            logger.info(f"Gemini Live Tool call: {fc.name}")
-                            args = fc.args if hasattr(fc, "args") else {}
-                            if not isinstance(args, dict):
-                                try:
-                                    args = dict(args)
-                                except:
-                                    args = {}
-                                    
-                            result = await mcp_client.call_tool(websocket, fc.name, args)
-                            logger.info(f"Tool result: {result}")
-                            
-                            # Ensure result is a dictionary or appropriate JSON object
-                            if not isinstance(result, dict):
-                                result = {"result": result}
+                    if pcm == b"END_OF_TURN":
+                        logger.info("End of turn received from mic. Transcribing...")
+                        if len(buffer) > 0:
+                            try:
+                                import asr
+                                transcript = await asyncio.to_thread(asr.transcribe, bytes(buffer), 16000)
+                                logger.info(f"USER TRANSCRIPT: {transcript}")
                                 
-                            await session.send(input=types.LiveClientToolResponse(
-                                function_responses=[types.FunctionResponse(
-                                    id=fc.id,
-                                    name=fc.name,
-                                    response=result
-                                )]
-                            ))
+                                async with gemini_session_lock:
+                                    if gemini_session:
+                                        if transcript:
+                                            await gemini_session.send(input=transcript, end_of_turn=True)
+                                        else:
+                                            logger.info("Empty transcript, sending just end of turn.")
+                                            await gemini_session.send(end_of_turn=True)
+                                    else:
+                                        logger.warning("Dropped transcript, Gemini session is disconnected!")
+                            except Exception as e:
+                                logger.error(f"Failed to transcribe or send audio: {e}")
+                                async with gemini_session_lock:
+                                    if gemini_session:
+                                        await gemini_session.send(end_of_turn=True)
+                            
+                            buffer.clear()
+                        else:
+                            async with gemini_session_lock:
+                                if gemini_session:
+                                    await gemini_session.send(end_of_turn=True)
+                        continue
 
-            send_task = asyncio.create_task(send_to_gemini())
-            receive_task = asyncio.create_task(receive_from_gemini())
+                    # Accumulate all PCM chunks for this turn
+                    buffer.extend(pcm)
+                except Exception as e:
+                    logger.error(f"Error accumulating audio: {e}")
+                    break
 
-            done, pending = await asyncio.wait(
-                [recv_task, send_task, receive_task],
-                return_when=asyncio.FIRST_COMPLETED
-            )
-            for t in pending:
-                t.cancel()
+        send_task = asyncio.create_task(send_to_gemini())
+        gemini_task = asyncio.create_task(manage_gemini_connection())
+
+        done, pending = await asyncio.wait(
+            [recv_task, send_task],
+            return_when=asyncio.FIRST_COMPLETED
+        )
+        for t in pending:
+            t.cancel()
+        gemini_task.cancel()
+        
+        for t in done:
+            task_name = t.get_name() if hasattr(t, 'get_name') else str(t)
+            logger.info(f"Task completed: {task_name}")
+            try:
+                t.result()
+            except Exception as e:
+                logger.error(f"Task crashed: {e}", exc_info=True)
 
     except asyncio.TimeoutError:
         logger.warning("Timed out waiting for device hello")
